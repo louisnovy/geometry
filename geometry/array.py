@@ -3,7 +3,7 @@ from typing import Callable
 from xxhash import xxh3_64_intdigest
 import numpy as np
 
-class TrackedArray(np.ndarray):
+class Array(np.ndarray):
     """An array that can be hashed based on its contents.
 
     This is a subclass of a numpy ndarray, and can be used in place of one. It can be constructed from
@@ -29,7 +29,7 @@ class TrackedArray(np.ndarray):
     TrackedArray([1, 2, 3])
     """
     
-    def __new__(cls, *args, **kwargs) -> TrackedArray:
+    def __new__(cls, *args, **kwargs) -> Array:
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
         return np.ascontiguousarray(*args, **kwargs).view(cls)
 
@@ -58,10 +58,10 @@ class TrackedArray(np.ndarray):
 
     # helper that will make a new version of a method that invalidates hash
     def _validate(method: str) -> Callable:
-        def f(self: TrackedArray, *args, **kwargs):
+        def f(self: Array, *args, **kwargs):
             if hasattr(self, "_hash"):
                 del self._hash
-            return getattr(super(TrackedArray, self), method)(*args, **kwargs)
+            return getattr(super(Array, self), method)(*args, **kwargs)
         return f
 
     # any methods that modify useful array data in place should be wrapped
