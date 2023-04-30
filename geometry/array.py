@@ -3,6 +3,7 @@ from typing import Callable
 from xxhash import xxh3_64_intdigest
 import numpy as np
 
+
 class Array(np.ndarray):
     """An array that can be hashed based on its contents.
 
@@ -28,7 +29,7 @@ class Array(np.ndarray):
     >>> b
     TrackedArray([1, 2, 3])
     """
-    
+
     def __new__(cls, *args, **kwargs) -> Array:
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
         return np.ascontiguousarray(*args, **kwargs).view(cls)
@@ -38,21 +39,22 @@ class Array(np.ndarray):
         if obj.ndim:
             return np.ndarray.__array_wrap__(self, obj, context)
         return obj[()]
-    
+
     def __array_finalize__(self, obj) -> None:
-        if obj is None: return # called on new; nothing to do
+        if obj is None:
+            return  # called on new; nothing to do
         if hasattr(self, "_hash"):
             del self._hash
         if isinstance(obj, type(self)) and hasattr(obj, "_hash"):
             del obj._hash
 
     def __hash__(self) -> int:
-        if hasattr(self, "_hash"): # we already computed
+        if hasattr(self, "_hash"):  # we already computed
             return self._hash
         try:
             self._hash = xxh3_64_intdigest(self)
             return self._hash
-        except ValueError: # xxhash requires contiguous memory
+        except ValueError:  # xxhash requires contiguous memory
             self._hash = xxh3_64_intdigest(self.copy(order="C"))
             return self._hash
 
@@ -62,6 +64,7 @@ class Array(np.ndarray):
             if hasattr(self, "_hash"):
                 del self._hash
             return getattr(super(Array, self), method)(*args, **kwargs)
+
         return f
 
     # any methods that modify useful array data in place should be wrapped
@@ -89,4 +92,3 @@ class Array(np.ndarray):
     __ior__ = _validate("__ior__")
 
     del _validate
-

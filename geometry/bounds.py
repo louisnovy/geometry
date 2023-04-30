@@ -6,6 +6,8 @@ from .array import Array
 
 
 class AABB:
+    """Axis-aligned bounding box in n-dimensional space."""
+
     def __init__(self, *args):
         if len(args) == 1:
             min, max = args[0]
@@ -44,3 +46,11 @@ class AABB:
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(min={self.min}, max={self.max})>"
+
+
+class OBB:
+    pass
+
+
+class BVH:
+    pass

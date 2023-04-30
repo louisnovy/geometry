@@ -8,9 +8,8 @@ def main():
         version=__version__,
         author="Louis Novy",
         author_email="novylouis@gmail.com",
-        package_dir="geometry",
-        packages=find_packages(),
         install_requires=["numpy", "scipy", "xxhash"],
+        extras_require={"dev": ["pytest"]},
     )
 
 if __name__ == "__main__":
