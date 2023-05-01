@@ -42,9 +42,14 @@ class TriangleMesh(Geometry):
         return len(self.faces)
 
     @property
+    def halfedges(self):
+        """Halfedges of the mesh."""
+        return self.faces.view(np.ndarray)[:, [1, 2, 2, 0, 0, 1]].reshape(-1, 3, 2)
+
+    @property
     def edges(self):
         """Unique edges of the mesh."""
-        return Edges.from_face_edges(self.faces.edges, mesh=self)
+        return Edges.from_halfedges(self.halfedges, mesh=self)
 
     @property
     def num_edges(self) -> int:
@@ -91,7 +96,7 @@ class TriangleMesh(Geometry):
     @property
     def vertex_vertex_incidence(self) -> csr_array:
         """Sparse vertex-vertex incidence matrix."""
-        edges = self.faces.edges.reshape(-1, 2)
+        edges = self.halfedges.reshape(-1, 2)
         row = edges[:, 0]
         col = edges[:, 1]
         shape = (self.num_vertices, self.num_vertices)
@@ -266,11 +271,6 @@ class Faces(Array):
         return self._mesh.vertices.view(np.ndarray)[self]
 
     @property
-    def edges(self):
-        """(n, 3, 2) triples of edges for each face."""
-        return self.view(np.ndarray)[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 3, 2)
-
-    @property
     def internal_angles(self):
         """(n, 3) array of corner angles for each face."""
         a, b, c = np.rollaxis(self.corners, 1)
@@ -383,11 +383,11 @@ class Edges(Array):
         self._mesh = getattr(obj, '_mesh', None)
 
     @classmethod
-    def from_face_edges(
-        cls: Edges, face_edges: np.ndarray, mesh: TriangleMesh
+    def from_halfedges(
+        cls: Edges, halfedges: np.ndarray, mesh: TriangleMesh
     ) -> Edges:
-        """Create an `Edges` object from an (n, 2) array of unprocessed edges."""
-        sorted_edges = np.sort(face_edges.reshape(-1, 2), axis=1)
+        """Create an `Edges` object from an array of halfedges."""
+        sorted_edges = np.sort(halfedges.reshape(-1, 2), axis=1)
         _, index, counts = unique_rows_2d(sorted_edges, return_index=True, return_counts=True)
         self = cls(sorted_edges[index], mesh=mesh)
         self.valences = counts
