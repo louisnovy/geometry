@@ -8,6 +8,7 @@ from scipy.sparse import csr_array, coo_array
 
 from .points import Points
 from ..base import Geometry
+from ..bounds import AABB
 from ..utils import Array, unique_rows_2d, unitize
 
 
@@ -26,16 +27,6 @@ class TriangleMesh(Geometry):
         return self.vertices.dim
 
     @property
-    def unprocessed_edges(self):
-        """Unprocessed edges (all edges of all faces)."""
-        return self.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2).view(Edges)
-
-    @property
-    def edges(self):
-        """Unique edges of the mesh."""
-        return Edges.from_unprocessed_edges(self.unprocessed_edges, mesh=self)
-
-    @property
     def num_vertices(self) -> int:
         """Number of vertices in the mesh."""
         return len(self.vertices)
@@ -50,6 +41,17 @@ class TriangleMesh(Geometry):
         """Number of unique edges in the mesh."""
         return len(self.edges)
 
+    # TODO: don't like this naming...
+    @property
+    def unprocessed_edges(self):
+        """Unprocessed edges (all edges of all faces)."""
+        return self.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2).view(Edges)
+
+    @property
+    def edges(self):
+        """Unique edges of the mesh."""
+        return Edges.from_unprocessed_edges(self.unprocessed_edges, mesh=self)
+
     @property
     def euler_characteristic(self) -> int:
         """Euler characteristic of the mesh. https://en.wikipedia.org/wiki/Euler_characteristic
@@ -63,6 +65,13 @@ class TriangleMesh(Geometry):
         Naive implementation and will give unexpected results for objects with multiple connected
         components or unreferenced vertices."""
         return (2 - self.euler_characteristic) // 2
+
+    # TODO: should this be only referenced or should we force the user to clean up unreferenced vertices?
+    @property
+    def aabb(self) -> AABB:
+        """Axis-aligned bounding box."""
+        vertices = self.vertices
+        return vertices[vertices.referenced].aabb
 
     @property
     def vertex_vertex_incidence(self) -> csr_array:
@@ -112,6 +121,7 @@ class TriangleMesh(Geometry):
         return hash(self.vertices) ^ hash(self.faces)
 
 
+# TODO: don't do it like this
 class MeshData:
     @cached_property
     def _mesh(self) -> TriangleMesh:
