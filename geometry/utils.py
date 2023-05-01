@@ -92,3 +92,37 @@ class Array(np.ndarray):
     __ior__ = _validate("__ior__")
 
     del _validate
+
+
+def unique_rows_2d(
+    array: Array, return_index=False, return_inverse=False, return_counts=False
+) -> Array:
+    """A significantly faster version of np.unique(array, axis=0, **kwargs) for 2D arrays.
+    https://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array"""
+    array = np.asanyarray(array)
+    if not array.ndim == 2:
+        raise ValueError(f"array must be 2D, got {array.ndim}D")
+    order = np.lexsort(array.T)
+    array = array[order]
+    diff = np.diff(array, axis=0)
+    ui = np.ones(len(array), "bool")
+    ui[1:] = (diff != 0).any(axis=1)
+    if return_index or return_inverse or return_counts:
+        result = (array[ui],)
+        if return_index:
+            result += (order[ui],)
+        if return_inverse:
+            result += (order,)
+        if return_counts:
+            result += (np.diff(np.append(np.where(ui)[0], len(array))),)
+        return result
+    return array[ui]
+
+
+def unitize(array: np.ndarray, axis=-1, nan=0.0) -> np.ndarray:
+    """Unitize an array along an axis. NaNs are replaced with nan."""
+    array = np.asanyarray(array)
+    with np.errstate(invalid="ignore"):
+        unit = array / np.linalg.norm(array, axis=axis, keepdims=True)
+    unit[np.isnan(unit)] = nan
+    return unit

@@ -2,10 +2,10 @@ from __future__ import annotations
 from numpy.typing import ArrayLike
 
 import numpy as np
-from .array import Array
+from .utils import Array
+from .base import Geometry
 
-
-class AABB:
+class AABB(Geometry):
     """Axis-aligned bounding box in n-dimensional space."""
 
     def __init__(self, *args):

@@ -1,2 +1,2 @@
-from .array import Array
+from .utils import Array
 from .bounds import AABB
