@@ -6,7 +6,7 @@ from .utils import Array
 from .base import Geometry
 
 class AABB(Geometry):
-    """Axis-aligned bounding box in n-dimensional space."""
+    """Axis-aligned bounding box in n-dimensions."""
 
     def __init__(self, *args):
         if len(args) == 1:

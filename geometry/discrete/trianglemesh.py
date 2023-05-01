@@ -38,20 +38,14 @@ class TriangleMesh(Geometry):
         return len(self.faces)
 
     @property
+    def edges(self):
+        """Unique edges of the mesh."""
+        return Edges.from_face_edges(self.faces.edges, mesh=self)
+
+    @property
     def num_edges(self) -> int:
         """Number of unique edges in the mesh."""
         return len(self.edges)
-
-    # TODO: don't like this naming...
-    @property
-    def unprocessed_edges(self):
-        """Unprocessed edges (all edges of all faces)."""
-        return self.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2).view(Edges)
-
-    @property
-    def edges(self):
-        """Unique edges of the mesh."""
-        return Edges.from_unprocessed_edges(self.unprocessed_edges, mesh=self)
 
     @property
     def euler_characteristic(self) -> int:
@@ -76,7 +70,7 @@ class TriangleMesh(Geometry):
     def volume(self) -> float:
         """Signed volume computed from the sum of the signed volumes of the tetrahedra formed by
         each face and the origin."""
-        v1, v2, v3 = self.faces.corners_unpacked
+        v1, v2, v3 = np.rollaxis(self.faces.corners, 1)
         return (v1 * np.cross(v2, v3)).sum() / 6
 
     @property
@@ -84,17 +78,16 @@ class TriangleMesh(Geometry):
         """Centroid computed from the sum of the centroids of each face weighted by area."""
         return self.faces.centroids.T @ self.faces.areas / self.area
 
-    # TODO: should this be only referenced or should we force the user to clean up unreferenced vertices?
     @property
     def aabb(self) -> AABB:
         """Axis-aligned bounding box."""
         vertices = self.vertices
-        return vertices[vertices.referenced].aabb
+        return vertices.aabb
 
     @property
     def vertex_vertex_incidence(self) -> csr_array:
         """Sparse vertex-vertex incidence matrix."""
-        edges = self.unprocessed_edges
+        edges = self.faces.edges.reshape(-1, 2)
         row = edges[:, 0]
         col = edges[:, 1]
         shape = (self.num_vertices, self.num_vertices)
@@ -139,18 +132,7 @@ class TriangleMesh(Geometry):
         return hash(self.vertices) ^ hash(self.faces)
 
 
-# TODO: don't do it like this
-class MeshData:
-    @cached_property
-    def _mesh(self) -> TriangleMesh:
-        raise AttributeError("Not attached to a mesh.")
-
-    def __array_finalize__(self, obj: Vertices | None):
-        super().__array_finalize__(obj)
-        self._mesh = getattr(obj, "_mesh", None)
-
-
-class Vertices(Points, MeshData):
+class Vertices(Points):
     def __new__(
         cls: Vertices,
         vertices: ArrayLike | None = None,
@@ -161,6 +143,14 @@ class Vertices(Points, MeshData):
         self = super().__new__(cls, vertices, dtype=np.float64)
         self._mesh = mesh
         return self
+
+    @cached_property
+    def _mesh(self) -> TriangleMesh:
+        raise AttributeError("Not attached to a mesh.")
+
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self._mesh = getattr(obj, '_mesh', None)
 
     @property
     def normals(self):
@@ -234,7 +224,7 @@ class Vertices(Points, MeshData):
         >>> assert isclose(m.vertices.angle_defects.sum(), 4*np.pi)
         """
         faces = self._mesh.faces
-        summed_angles = np.bincount(faces.ravel(), weights=faces.corner_angles.ravel())
+        summed_angles = np.bincount(faces.ravel(), weights=faces.internal_angles.ravel())
         defects = 2 * np.pi - summed_angles
         # boundary vertices have zero angle defect
         defects[self.boundaries] = 0
@@ -246,7 +236,7 @@ class Vertices(Points, MeshData):
         return self.angle_defects / self.voronoi_areas
 
 
-class Faces(Array, MeshData):
+class Faces(Array):
     def __new__(
         cls: Faces,
         faces: ArrayLike | None = None,
@@ -258,23 +248,32 @@ class Faces(Array, MeshData):
         self._mesh = mesh
         return self
 
+    @cached_property
+    def _mesh(self) -> TriangleMesh:
+        raise AttributeError("Not attached to a mesh.")
+
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self._mesh = getattr(obj, '_mesh', None)
+
     @property
     def corners(self):
         """Vertices of each face."""
         return self._mesh.vertices.view(np.ndarray)[self]
 
     @property
-    def corners_unpacked(self):
-        """Unpacked version of `corners` for convenience."""
-        return self.corners[:, 0], self.corners[:, 1], self.corners[:, 2]
+    def edges(self):
+        """(n, 3, 2) triples of edges for each face."""
+        return self.view(np.ndarray)[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 3, 2)
 
     @property
-    def corner_angles(self):
+    def internal_angles(self):
         """(n, 3) array of corner angles for each face."""
-        a, b, c = self.corners_unpacked
+        a, b, c = np.rollaxis(self.corners, 1)
         u, v, w = unitize(b - a), unitize(c - a), unitize(c - b)
         res = np.zeros((len(self), 3), dtype=np.float64)
         # clip to protect against floating point errors causing arccos to return nan
+        # TODO: can we ensure precision here somehow?
         res[:, 0] = np.arccos(np.clip(np.einsum("ij,ij->i", u, v), -1, 1))
         res[:, 1] = np.arccos(np.clip(np.einsum("ij,ij->i", -u, w), -1, 1))
         # complement angle so we can take a shortcut
@@ -289,7 +288,7 @@ class Faces(Array, MeshData):
     @property
     def cross_products(self):
         """(n, 3) array of cross products for each face."""
-        v0, v1, v2 = self.corners_unpacked
+        v0, v1, v2 = np.rollaxis(self.corners, 1)
         return np.cross(v1 - v0, v2 - v0)
 
     @property
@@ -308,7 +307,7 @@ class Faces(Array, MeshData):
     @property
     def voronoi_areas(self):
         """(n, 3) array of voronoi areas for each vertex of each face. Degenerate faces have area of 0."""
-        v0, v1, v2 = self.corners_unpacked
+        v0, v1, v2 = np.rollaxis(self.corners, 1)
         e0, e1, e2 = v2 - v1, v0 - v2, v1 - v0
         # TODO: general sloppy code here. we can index in a loop
         # TODO: we are losing more precision than i would like...
@@ -353,14 +352,13 @@ class Faces(Array, MeshData):
 
     @property
     def boundaries(self):
-        """(n,) bool array of whether each face has a boundary edge."""
+        """(n,) bool array of whether each face has at least one boundary edge."""
         edges = self._mesh.edges
         return np.isin(self, edges[edges.boundaries]).any(axis=1)
 
 
-class Edges(Array, MeshData):
-    """A collection of unique edges."""
-
+class Edges(Array):
+    """(n, 2) array of unique edges. Each row is a pair of vertex indices."""
     def __new__(
         cls: Edges,
         edges: ArrayLike | None = None,
@@ -371,17 +369,26 @@ class Edges(Array, MeshData):
         self = super().__new__(cls, edges, dtype=np.int32)
         self._mesh = mesh
         return self
+    
+    @cached_property
+    def _mesh(self) -> TriangleMesh:
+        raise AttributeError("Not attached to a mesh.")
+
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self._mesh = getattr(obj, '_mesh', None)
 
     @classmethod
-    def from_unprocessed_edges(
-        cls: Edges, unprocessed_edges: ArrayLike, mesh: TriangleMesh
+    def from_face_edges(
+        cls: Edges, face_edges: np.ndarray, mesh: TriangleMesh
     ) -> Edges:
         """Create an `Edges` object from an (n, 2) array of unprocessed edges."""
-        sorted_edges = np.sort(unprocessed_edges, axis=1)
+        sorted_edges = np.sort(face_edges.reshape(-1, 2), axis=1)
         _, index, counts = unique_rows_2d(sorted_edges, return_index=True, return_counts=True)
         self = cls(sorted_edges[index], mesh=mesh)
         self.valences = counts
         self.face_indices = np.repeat(np.arange(mesh.num_faces), mesh.faces.shape[1])[index]
+        self.boundaries = counts == 1
         return self
 
     def __post_init__(self):
@@ -403,10 +410,6 @@ class Edges(Array, MeshData):
         """`Points` of the midpoints of each edge."""
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
 
-    @property
-    def boundaries(self):
-        """(n_edges,) bool array of whether each edge is a boundary edge."""
-        return self.valences == 1
 
 
 def convex_hull(
@@ -415,10 +418,10 @@ def convex_hull(
     joggle_on_failure: bool = True,
 ):
     """Compute the convex hull of a set of points or mesh."""
-    mesh_type = TriangleMesh
 
+    mesh_type = TriangleMesh
     if isinstance(obj, TriangleMesh):
-        points = obj.vertices[obj.vertices.referenced]
+        points = obj.vertices
         mesh_type = type(obj)  # if obj is a subclass, return that type
 
     points = np.asanyarray(points)
@@ -455,13 +458,13 @@ def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
     return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
 
 
+
 def tetrahedron():
     """Tetrahedron `TriangleMesh` centered at the origin."""
     s = 1.0 / np.sqrt(2.0)
     vertices = [(-1.0, 0.0, -s), (1.0, 0.0, -s), (0.0, 1.0, s), (0.0, -1.0, s)]
     faces = [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)]
     return TriangleMesh(Array(vertices) * 0.5, faces)
-
 
 def icosahedron():
     """Unit icosahedron centered at the origin."""
