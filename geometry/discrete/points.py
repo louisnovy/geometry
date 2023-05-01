@@ -21,6 +21,10 @@ class Points(Array, Geometry):
             raise ValueError(f"Points array must be 2D, got {obj.ndim}D")
         return obj
 
+    @classmethod
+    def empty(cls, dim: int, dtype=None):
+        return cls(np.empty((0, dim), dtype=dtype))
+
     @property
     def aabb(self) -> AABB:
         return AABB(self.min(axis=0), self.max(axis=0))

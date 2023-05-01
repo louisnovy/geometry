@@ -22,6 +22,10 @@ class TriangleMesh(Geometry):
         self.vertices: Vertices = Vertices(vertices, mesh=self)
         self.faces: Faces = Faces(faces, mesh=self)
 
+    @classmethod
+    def empty(cls, dim: int):
+        return cls(vertices=Vertices.empty(dim))
+
     @property
     def dim(self):
         """Number of spatial dimensions."""
