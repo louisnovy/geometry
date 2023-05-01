@@ -11,6 +11,7 @@ def main():
         author_email="novylouis@gmail.com",
         install_requires=["numpy", "scipy", "xxhash"],
         extras_require={"testing": ["pytest"], "dev": ["pytest", "pre-commit"]},
+        packages=["geometry"],
     )
 
 
