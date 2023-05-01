@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-class Geometry:
+class Geometry(ABC):
     @abstractmethod
     def dim(self):
         """All geometry objects must be embeddable in some dimension."""

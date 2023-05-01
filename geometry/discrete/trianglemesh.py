@@ -10,8 +10,8 @@ from .points import Points
 from ..base import Geometry
 from ..utils import Array, unique_rows_2d, unitize
 
-class TriangleMesh(Geometry):
 
+class TriangleMesh(Geometry):
     def __init__(
         self,
         vertices: ArrayLike | None = None,
@@ -108,6 +108,9 @@ class TriangleMesh(Geometry):
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
 
+    def __hash__(self):
+        return hash(self.vertices) ^ hash(self.faces)
+
 
 class MeshData:
     @cached_property
@@ -203,7 +206,7 @@ class Faces(Array, MeshData):
 
 class Edges(Array, MeshData):
     """A collection of unique edges."""
-    
+
     def __new__(
         cls: Edges,
         edges: ArrayLike | None = None,
@@ -217,9 +220,7 @@ class Edges(Array, MeshData):
 
     @classmethod
     def from_unprocessed_edges(
-        cls: Edges,
-        unprocessed_edges: ArrayLike,
-        mesh: TriangleMesh
+        cls: Edges, unprocessed_edges: ArrayLike, mesh: TriangleMesh
     ) -> Edges:
         """Create an `Edges` object from an (n, 2) array of unprocessed edges."""
         sorted_edges = np.sort(unprocessed_edges, axis=1)

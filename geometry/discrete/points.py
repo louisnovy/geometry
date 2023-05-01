@@ -8,7 +8,7 @@ from scipy.spatial import cKDTree
 from .. import Array, AABB
 from ..base import Geometry
 
-class Points(Geometry, Array):
+class Points(Array, Geometry):
     """A collection of points in n-dimensional space."""
 
     def __new__(
