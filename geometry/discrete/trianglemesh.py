@@ -601,6 +601,7 @@ def icosahedron():
     return TriangleMesh(vertices, faces)
 
 
+# TODO: api should be cone(p0, p1, radius, n, cap=True)
 def cone(n: int, cap=True):
     verts = np.zeros((n + 2, 3))
 
@@ -623,6 +624,7 @@ def cone(n: int, cap=True):
     return TriangleMesh(verts, faces)
 
 
+# TODO: api should be cylinder(p0, p1, r0, r1, n, cap=True)
 def cylinder(n: int, cap=True):
     verts = np.zeros((n * 2, 3))
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
@@ -668,7 +670,8 @@ def cylinder(n: int, cap=True):
 
 def uv_sphere(u=32, v=16):
     """
-    Creates a unit sphere mesh centered at the origin.
+    `TriangleMesh` approximating a unit sphere centered at the origin
+    by using a UV parameterization.
 
     Args:
         u: Number of segments along the longitude.
@@ -729,7 +732,8 @@ def torus(
     v=32,
 ):
     """
-    `TriangleMesh` approximating a torus centered at the origin.
+    `TriangleMesh` approximating a torus centered at the origin by using a UV
+    parameterization.
 
     Args:
         tube_radius: Radius of the tube.
