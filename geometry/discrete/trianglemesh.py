@@ -66,6 +66,18 @@ class TriangleMesh(Geometry):
         components or unreferenced vertices."""
         return (2 - self.euler_characteristic) // 2
 
+    @property
+    def area(self):
+        """Total surface area."""
+        return self.faces.areas.sum()
+    
+    @property
+    def volume(self) -> float:
+        """Signed volume computed from the sum of the signed volumes of the tetrahedra formed by
+        each face and the origin."""
+        v1, v2, v3 = self.faces.corners_unpacked
+        return (v1 * np.cross(v2, v3)).sum() / 6
+
     # TODO: should this be only referenced or should we force the user to clean up unreferenced vertices?
     @property
     def aabb(self) -> AABB:
@@ -150,7 +162,7 @@ class Vertices(Points, MeshData):
         Vertex normals are the mean of adjacent face normals weighted by area."""
         faces = self._mesh.faces
         incidence = self._mesh.vertex_face_incidence
-        # since we are about to unitize, we can simply multiply by area
+        # since we are about to unitize next we can simply multiply by area
         vertex_normals = incidence @ (faces.normals * faces.areas[:, None])
         return unitize(vertex_normals).view(Array)
 
@@ -164,6 +176,12 @@ class Vertices(Points, MeshData):
         >>> assert m.vertices.areas.sum() == m.faces.areas.sum() == m.area
         """
         return self._mesh.vertex_face_incidence @ self._mesh.faces.areas / 3
+    
+    @property
+    def voronoi_areas(self):
+        """(n,) array of the areas of the voronoi cells associated with each vertex."""
+        faces = self._mesh.faces
+        return np.bincount(faces.ravel(), weights=faces.voronoi_areas.ravel(), minlength=len(self))
 
     @property
     def valences(self):
@@ -219,12 +237,12 @@ class Faces(Array, MeshData):
         return self._mesh.vertices.view(np.ndarray)[self]
 
     @property
-    def corners_unpacked(self) -> tuple[Array, Array, Array]:
+    def corners_unpacked(self):
         """Unpacked version of `corners` for convenience."""
         return self.corners[:, 0], self.corners[:, 1], self.corners[:, 2]
 
     @property
-    def corner_angles(self) -> Array:
+    def corner_angles(self):
         """(n, 3) array of corner angles for each face."""
         a, b, c = self.corners_unpacked
         u, v, w = unitize(b - a), unitize(c - a), unitize(c - b)
@@ -237,13 +255,18 @@ class Faces(Array, MeshData):
         return res
 
     @property
-    def cross_products(self) -> Array:
+    def centroids(self) -> Points:
+        """(n, self.dimensions) `Points` of face centroids."""
+        return Points(self.corners.mean(axis=1))
+    
+    @property
+    def cross_products(self):
         """(n, 3) array of cross products for each face."""
         v0, v1, v2 = self.corners_unpacked
         return np.cross(v1 - v0, v2 - v0)
 
     @property
-    def double_areas(self) -> Array:
+    def double_areas(self):
         """(n,) array of double areas for each face. (norms of cross products)"""
         crossed = self.cross_products
         if self._mesh.dim == 2:
@@ -251,16 +274,44 @@ class Faces(Array, MeshData):
         return norm(crossed, axis=1)
 
     @property
-    def areas(self) -> Array:
+    def areas(self):
         """(n,) array of areas for each face."""
         return self.double_areas / 2
+    
+    @property
+    def voronoi_areas(self) -> Array:
+        """(n, 3) array of voronoi areas for each vertex of each face. Degenerate faces have area of 0."""
+        v0, v1, v2 = self.corners_unpacked
+        e0, e1, e2 = v2 - v1, v0 - v2, v1 - v0
+        # TODO: general sloppy code here. we can index in a loop
+        # TODO: we are losing more precision than i would like...
+        # TODO: also we could factor out cots as a separate method
+        double_area = self.double_areas
+        with np.errstate(divide='ignore', invalid='ignore'):
+            cot_0 = np.einsum('ij,ij->i', e2, -e1) / double_area
+            cot_1 = np.einsum('ij,ij->i', e0, -e2) / double_area
+            cot_2 = np.einsum('ij,ij->i', e1, -e0) / double_area
+            sq_l0, sq_l1, sq_l2 = norm(e0, axis=1) ** 2, norm(e1, axis=1) ** 2, norm(e2, axis=1) ** 2
+            voronoi_areas = np.zeros((len(self), 3), dtype=np.float64)
+            voronoi_areas[:, 0] = sq_l1 * cot_1 + sq_l2 * cot_2
+            voronoi_areas[:, 1] = sq_l0 * cot_0 + sq_l2 * cot_2
+            voronoi_areas[:, 2] = sq_l1 * cot_1 + sq_l0 * cot_0
+            voronoi_areas /= 8.0
+        mask0 = cot_0 < 0.0
+        mask1 = cot_1 < 0.0
+        mask2 = cot_2 < 0.0
+        voronoi_areas[mask0] = np.array([0.5, 0.25, 0.25])[None, :] * double_area[mask0, None] * 0.5
+        voronoi_areas[mask1] = np.array([0.25, 0.5, 0.25])[None, :] * double_area[mask1, None] * 0.5
+        voronoi_areas[mask2] = np.array([0.25, 0.25, 0.5])[None, :] * double_area[mask2, None] * 0.5
+        voronoi_areas[self.degenerated] = 0.0
+        return voronoi_areas.view(Array)
 
     @property
-    def degenerated(self) -> Array:
+    def degenerated(self):
         return self.double_areas == 0
 
     @property
-    def normals(self) -> Array:
+    def normals(self):
         """(n, 3) array of unit normal vectors for each face."""
         if self._mesh.dim == 2:
             raise NotImplementedError("TODO: implement for 2D meshes")
@@ -269,6 +320,11 @@ class Faces(Array, MeshData):
         normals[np.isnan(normals)] = 0
         return normals
 
+    @property
+    def boundaries(self):
+        """(n,) bool array of whether each face has a boundary edge."""
+        edges = self._mesh.edges
+        return np.isin(self, edges[edges.boundaries]).any(axis=1)
 
 class Edges(Array, MeshData):
     """A collection of unique edges."""
