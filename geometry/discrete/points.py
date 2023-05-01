@@ -21,6 +21,10 @@ class Points(Array, Geometry):
             raise ValueError(f"Points array must be 2D, got {obj.ndim}D")
         return obj
 
+    @property
+    def dim(self):
+        return self.shape[1]
+
     @classmethod
     def empty(cls, dim: int, dtype=None):
         return cls(np.empty((0, dim), dtype=dtype))
@@ -34,8 +38,12 @@ class Points(Array, Geometry):
         raise NotImplementedError
     
     @property
-    def dim(self):
-        return self.shape[1]
+    def is_planar(self):
+        """`True` if all points are coplanar."""
+        # TODO: generalize to n-dimensions
+        singular_values = np.linalg.svd(self - self.mean(axis=0), compute_uv=False, full_matrices=False)
+        # print(singular_values[2])
+        return np.allclose(singular_values[2], 0, atol=1e-6) # TODO: tolerance should be configurable
 
     @property
     def kdtree(self) -> cKDTree:

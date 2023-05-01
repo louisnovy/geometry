@@ -44,6 +44,8 @@ class TriangleMesh(Geometry):
     @property
     def halfedges(self):
         """Halfedges of the mesh."""
+        # TODO: convention?
+        # return self.faces.view(np.ndarray)[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 3, 2)
         return self.faces.view(np.ndarray)[:, [1, 2, 2, 0, 0, 1]].reshape(-1, 3, 2)
 
     @property
@@ -92,6 +94,67 @@ class TriangleMesh(Geometry):
         """Axis-aligned bounding box."""
         vertices = self.vertices
         return vertices.aabb
+
+    @property
+    def is_empty(self) -> bool:
+        """True if no geometry is defined."""
+        return self.num_faces == 0 | self.num_vertices == 0
+
+    @property
+    def is_finite(self) -> bool:
+        """True if all vertices and faces are finite."""
+        return bool(np.isfinite(self.vertices).all() and np.isfinite(self.faces).all())
+
+    @property
+    def is_regular(self) -> bool:
+        """True if all vertex valences are equal."""
+        return self.vertices.valences.var() == 0
+
+    @property
+    def is_closed(self):
+        """True if all edges are shared by at least two faces.
+        https://en.wikipedia.org/wiki/Closed_surface"""
+        if self.num_faces == 0: return False
+        return np.all(self.edges.valences >= 2)
+
+    @property
+    def is_oriented(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    def is_edge_manifold(self) -> bool:
+        """True if all edges are shared by exactly one or two faces."""
+        if self.num_faces == 0: return False
+        valences = self.edges.valences
+        return np.all((valences == 1) | (valences == 2))
+
+    @property
+    def is_planar(self) -> bool:
+        """True if all vertices lie within a plane."""
+        return self.vertices.is_planar
+
+    @property
+    def is_convex(self) -> bool:
+        """True if the mesh defines a convex polytope.
+        https://en.wikipedia.org/wiki/Convex_polytope"""
+        if self.dim == 2: raise NotImplementedError # TODO: this could check boundaries
+        # TODO: check for manifold as well
+        return np.all(np.einsum("ij,ij->i", self.faces.normals, self.faces.centroids - self.centroid) >= 0)
+
+    @property
+    def is_developable(self) -> bool:
+        """True if the mesh represents a developable surface.
+        >>> assert cylinder(cap=False).is_developable == True
+        """
+        return np.allclose(self.vertices.gaussian_curvatures, 0)
+
+    @property
+    def is_self_intersecting(self) -> bool:
+        raise NotImplementedError # TODO: check for self-intersections
+
+    @property
+    def is_watertight(self) -> bool:
+        raise NotImplementedError
 
     @property
     def vertex_vertex_incidence(self) -> csr_array:
@@ -201,7 +264,7 @@ class Vertices(Points):
         >>> m = icosahedron()
         >>> for i in range(5):
         >>>     print(m.vertices.valences.mean())
-        >>>     m = m.subdivide()
+        >>>     m = subdivide_midpoint(m)
         5.0
         5.714285714285714
         5.925925925925926
@@ -462,13 +525,33 @@ def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
     return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
 
 
+def ngon(n=6, radius=1, angle=0) -> TriangleMesh:
+    """Regular `n`-gon centered at the origin."""
+    if not n >= 3: raise ValueError("ngons must have at least 3 sides")
+    verts = np.empty((n, 3))
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False) + angle
+    verts[:, 0] = np.cos(angles) * radius
+    verts[:, 1] = np.sin(angles) * radius
+    verts[:, 2] = 0
+    faces = np.empty((n, 3), dtype=int)
+    faces[:, 0] = np.arange(n)
+    faces[:, 1] = np.roll(np.arange(n), -1)
+    faces[:, 2] = n
+    return TriangleMesh(verts, faces)
+
 
 def tetrahedron():
-    """Tetrahedron `TriangleMesh` centered at the origin."""
+    """Tetrahedron centered at the origin."""
     s = 1.0 / np.sqrt(2.0)
     vertices = [(-1.0, 0.0, -s), (1.0, 0.0, -s), (0.0, 1.0, s), (0.0, -1.0, s)]
     faces = [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)]
     return TriangleMesh(Array(vertices) * 0.5, faces)
+
+
+def octahedron():
+    """Octahedron centered at the origin."""
+    return uv_sphere(u=4, v=2)
+
 
 def icosahedron():
     """Unit icosahedron centered at the origin."""
@@ -516,3 +599,174 @@ def icosahedron():
     ]
 
     return TriangleMesh(vertices, faces)
+
+
+def cone(n: int, cap=True):
+    verts = np.zeros((n + 2, 3))
+
+    verts[0] = (0, 0, 1)
+    verts[-1] = (0, 0, 0)
+
+    verts[1:-1, 0] = np.cos(np.linspace(0, 2 * np.pi, n, endpoint=False))
+    verts[1:-1, 1] = np.sin(np.linspace(0, 2 * np.pi, n, endpoint=False))
+
+    faces = np.zeros((n + (n if cap else 0), 3), dtype=np.int32)
+    faces[:n, 0] = 0
+    faces[:n, 1] = np.arange(1, n + 1)
+    faces[:n, 2] = np.roll(faces[:n, 1], -1)
+
+    if cap:
+        faces[n:, 0] = np.arange(1, n + 1)
+        faces[n:, 1] = n + 1
+        faces[n:, 2] = np.roll(faces[n:, 0], -1)
+
+    return TriangleMesh(verts, faces)
+
+
+def cylinder(n: int, cap=True):
+    verts = np.zeros((n * 2, 3))
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+
+    # top ring
+    verts[n:, 0] = np.cos(angles)
+    verts[n:, 1] = np.sin(angles)
+    verts[n:, 2] = 1
+
+    # bottom ring
+    verts[:n, 0] = np.cos(angles)
+    verts[:n, 1] = np.sin(angles)
+    verts[:n, 2] = 0
+
+    faces = np.zeros((n * 2, 3), dtype=np.int32)
+
+    # connect rings with triangles
+    faces[:n, 0] = np.arange(n)
+    faces[:n, 1] = np.roll(faces[:n, 0], -1)
+    faces[:n, 2] = faces[:n, 0] + n
+    faces[n:, 0] = faces[:n, 1]
+    faces[n:, 1] = faces[:n, 1] + n
+    faces[n:, 2] = faces[:n, 0] + n
+
+    if cap:
+        # centers
+        verts = np.concatenate([verts, np.array([[0, 0, 0], [0, 0, 1]])], axis=0)
+
+        cap1 = np.zeros((n, 3), dtype=np.int32)
+        cap1[:, 0] = np.arange(n)
+        cap1[:, 1] = n * 2
+        cap1[:, 2] = np.roll(cap1[:, 0], -1)
+
+        cap2 = np.zeros((n, 3), dtype=np.int32)
+        cap2[:, 0] = np.arange(n, n * 2)
+        cap2[:, 1] = n * 2 + 1
+        cap2[:, 2] = np.roll(cap2[:, 0], 1)
+
+        faces = np.concatenate([faces, cap1, cap2], axis=0)
+
+    return TriangleMesh(verts, faces)
+
+
+def uv_sphere(u=32, v=16):
+    """
+    Creates a unit sphere mesh centered at the origin.
+
+    Args:
+        u: Number of segments along the longitude.
+        v: Number of segments along the latitude.
+    """
+    verts = np.zeros((u * (v - 1) + 2, 3))
+
+    verts[-2, :] = (0, 0, 1)  # top pole
+    verts[-1, :] = (0, 0, -1)  # bottom pole
+
+    # body
+    i, j = np.indices((v - 1, u))
+    v_angle = np.pi * (i + 1) / v
+    u_angle = 2 * np.pi * j / u
+    verts[:-2] = np.stack(( # all but the poles
+        np.cos(u_angle) * np.sin(v_angle),
+        np.sin(u_angle) * np.sin(v_angle),
+        np.cos(v_angle)
+    ), axis=-1).reshape(-1, 3)
+
+    vlen = len(verts)
+    faces = np.zeros((2 * u + 2 * (v - 2) * u, 3), dtype=np.int32)
+
+    # fans for the poles
+    faces[:u, 0] = np.arange(u)
+    faces[:u, 1] = np.roll(faces[:u, 0], -1)
+    faces[:u, 2] = vlen - 2
+
+    faces[u : 2 * u, 0] = np.arange(u) + (v - 2) * u
+    faces[u : 2 * u, 1] = np.roll(faces[u : 2 * u, 0], 1)
+    faces[u : 2 * u, 2] = vlen - 1
+
+    # indices of quads
+    i, j = np.indices((v - 2, u))
+    a = i * u + j
+    b = (i + 1) * u + (j + 1) % u
+    c = i * u + (j + 1) % u
+    d = (i + 1) * u + j
+
+    # triangle a, b, c
+    idx = 2 * u + i * u + j
+    faces[idx, 0] = a
+    faces[idx, 1] = b
+    faces[idx, 2] = c
+
+    # triangle a, d, b
+    idx = 2 * u + (v - 2) * u + i * u + j
+    faces[idx, 0] = a
+    faces[idx, 1] = d
+    faces[idx, 2] = b
+
+    return TriangleMesh(verts, faces)
+
+
+def torus(
+    tube_radius=0.5,
+    u=16,
+    v=32,
+):
+    """
+    `TriangleMesh` approximating a torus centered at the origin.
+
+    Args:
+        tube_radius: Radius of the tube.
+        u: Number of segments along the tube.
+        v: Number of segments along the ring.
+    """
+    if not all([u > 2, v > 2]): raise ValueError("u and v must be greater than 2")
+    verts = np.zeros((u * v, 3))
+
+    idx = np.arange(u * v)
+    i, j = divmod(idx, u)
+    u_angle = 2 * np.pi * j / u
+    v_angle = 2 * np.pi * i / v
+
+    verts[:, 0] = (1 + tube_radius * np.cos(u_angle)) * np.cos(v_angle)
+    verts[:, 1] = (1 + tube_radius * np.cos(u_angle)) * np.sin(v_angle)
+    verts[:, 2] = tube_radius * np.sin(u_angle)
+
+    faces = np.zeros((2 * u * v, 3), dtype=np.int32)
+
+    # indices of quads
+    i, j = np.indices((v, u))
+    a = i * u + j
+    b = ((i + 1) % v) * u + j
+    c = ((i + 1) % v) * u + ((j + 1) % u)
+    d = i * u + ((j + 1) % u)
+
+    # triangle a, b, c
+    idx = i * u + j
+    faces[idx, 0] = a
+    faces[idx, 1] = b
+    faces[idx, 2] = c
+
+    # triangle a, c, d
+    idx += u * v
+    faces[idx, 0] = a
+    faces[idx, 1] = c
+    faces[idx, 2] = d
+
+    return TriangleMesh(verts, faces)
