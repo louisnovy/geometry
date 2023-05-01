@@ -5,6 +5,7 @@ from functools import cached_property
 import numpy as np
 from numpy.linalg import norm
 from scipy.sparse import csr_array, coo_array
+from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 from .points import Points
 from ..base import Geometry
@@ -77,6 +78,11 @@ class TriangleMesh(Geometry):
         each face and the origin."""
         v1, v2, v3 = self.faces.corners_unpacked
         return (v1 * np.cross(v2, v3)).sum() / 6
+    
+    @property
+    def centroid(self):
+        """Centroid computed from the sum of the centroids of each face weighted by area."""
+        return self.faces.centroids.T @ self.faces.areas / self.area
 
     # TODO: should this be only referenced or should we force the user to clean up unreferenced vertices?
     @property
@@ -106,7 +112,7 @@ class TriangleMesh(Geometry):
         shape = (len(self.vertices), len(faces))
         return coo_array((data, (row, col)), shape=shape).tocsr()
 
-    def vertices_adjacent_vertex(self, index: int) -> Array:
+    def vertices_adjacent_vertex(self, index: int):
         """Find the indices of vertices adjacent to the vertex at the given index.
 
         >>> m = icosahedron()
@@ -116,7 +122,7 @@ class TriangleMesh(Geometry):
         incidence = self.vertex_vertex_incidence
         return incidence.indices[incidence.indptr[index] : incidence.indptr[index + 1]]
 
-    def faces_adjacent_vertex(self, idx: int) -> Array:
+    def faces_adjacent_vertex(self, idx: int):
         """Find the indices of faces adjacent to the vertex at the given index.
 
         >>> m = icosahedron()
@@ -157,14 +163,14 @@ class Vertices(Points, MeshData):
         return self
 
     @property
-    def normals(self) -> Array:
+    def normals(self):
         """(n, 3) float array of unit normal vectors for each vertex.
         Vertex normals are the mean of adjacent face normals weighted by area."""
         faces = self._mesh.faces
         incidence = self._mesh.vertex_face_incidence
         # since we are about to unitize next we can simply multiply by area
         vertex_normals = incidence @ (faces.normals * faces.areas[:, None])
-        return unitize(vertex_normals).view(Array)
+        return unitize(vertex_normals)
 
     @property
     def areas(self):
@@ -279,7 +285,7 @@ class Faces(Array, MeshData):
         return self.double_areas / 2
     
     @property
-    def voronoi_areas(self) -> Array:
+    def voronoi_areas(self):
         """(n, 3) array of voronoi areas for each vertex of each face. Degenerate faces have area of 0."""
         v0, v1, v2 = self.corners_unpacked
         e0, e1, e2 = v2 - v1, v0 - v2, v1 - v0
@@ -304,7 +310,7 @@ class Faces(Array, MeshData):
         voronoi_areas[mask1] = np.array([0.25, 0.5, 0.25])[None, :] * double_area[mask1, None] * 0.5
         voronoi_areas[mask2] = np.array([0.25, 0.25, 0.5])[None, :] * double_area[mask2, None] * 0.5
         voronoi_areas[self.degenerated] = 0.0
-        return voronoi_areas.view(Array)
+        return voronoi_areas
 
     @property
     def degenerated(self):
@@ -357,24 +363,61 @@ class Edges(Array, MeshData):
             raise ValueError("Edges must be an (n, 2) array")
 
     @property
-    def lengths(self) -> Array:
+    def lengths(self):
         """(n_edges,) array of edge lengths."""
         return norm(self._mesh.vertices[self[:, 0]] - self._mesh.vertices[self[:, 1]], axis=1)
 
     @property
-    def lengths_squared(self) -> Array:
+    def lengths_squared(self):
         """(n_edges,) array of squared edge lengths."""
         return self.lengths**2
 
     @property
-    def midpoints(self) -> Array:
+    def midpoints(self):
         """`Points` of the midpoints of each edge."""
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
 
     @property
-    def boundaries(self) -> Array:
+    def boundaries(self):
         """(n_edges,) bool array of whether each edge is a boundary edge."""
         return self.valences == 1
+
+
+
+def convex_hull(
+    obj: TriangleMesh | Points,
+    qhull_options: str = None,
+    joggle_on_failure: bool = True,
+):
+    """Compute the convex hull of a set of points or mesh."""
+
+    if isinstance(obj, TriangleMesh):
+        points = obj.vertices[obj.vertices.referenced]
+    
+    points = np.asanyarray(points)
+    
+    try:
+        hull = ConvexHull(points, qhull_options=qhull_options)
+    except QhullError as e:
+        if joggle_on_failure: # TODO: add warning
+            return convex_hull(points, qhull_options=qhull_options, joggle_on_failure=False)
+        raise e
+    
+    if points.shape[1] == 2:
+        vertices = points[hull.vertices]
+        return TriangleMesh(vertices, Delaunay(vertices).simplices)
+
+    # find the actual vertices and map them to the original points
+    idx = np.sort(hull.vertices)
+    faces = np.zeros(len(hull.points), dtype=np.float64)
+    faces[idx] = np.arange(len(idx))
+    m = TriangleMesh(hull.points[idx], faces[hull.simplices])
+
+    # flip winding order of faces that are pointing inwards.
+    flipped = np.einsum("ij,ij->i", m.faces.centroids - m.centroid, m.faces.normals) < 0
+    fixed = np.where(flipped[:, None], m.faces[:, ::-1], m.faces)
+
+    return TriangleMesh(m.vertices, fixed)
 
 
 def tetrahedron():
