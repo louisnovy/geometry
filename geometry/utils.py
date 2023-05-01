@@ -94,6 +94,7 @@ class Array(np.ndarray):
     del _validate
 
 
+# TODO: test libigl unique_rows
 def unique_rows_2d(
     array: Array, return_index=False, return_inverse=False, return_counts=False
 ) -> Array:
