@@ -1,0 +1,31 @@
+name: Unit Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.6", "3.7", "3.8", "3.9", "3.10", "3.11"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      # - name: Update packages
+      #   run: |
+      #     wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+      #     echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+      #     sudo apt-get update
+      # - name: Install OpenCL
+      #   run: sudo apt-get install -y intel-oneapi-runtime-compilers intel-oneapi-runtime-opencl
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with: 
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies and package
+        run: pip install -e '.[testing]'
+      - name: Run pytest
+        run: python -m pytest
