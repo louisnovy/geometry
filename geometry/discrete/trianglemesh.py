@@ -71,14 +71,14 @@ class TriangleMesh(Geometry):
     def area(self):
         """Total surface area."""
         return self.faces.areas.sum()
-    
+
     @property
     def volume(self) -> float:
         """Signed volume computed from the sum of the signed volumes of the tetrahedra formed by
         each face and the origin."""
         v1, v2, v3 = self.faces.corners_unpacked
         return (v1 * np.cross(v2, v3)).sum() / 6
-    
+
     @property
     def centroid(self):
         """Centroid computed from the sum of the centroids of each face weighted by area."""
@@ -182,7 +182,7 @@ class Vertices(Points, MeshData):
         >>> assert m.vertices.areas.sum() == m.faces.areas.sum() == m.area
         """
         return self._mesh.vertex_face_incidence @ self._mesh.faces.areas / 3
-    
+
     @property
     def voronoi_areas(self):
         """(n,) array of the areas of the voronoi cells associated with each vertex."""
@@ -224,6 +224,27 @@ class Vertices(Points, MeshData):
         boundary_edges = edges[edges.boundaries]
         return np.bincount(boundary_edges.ravel(), minlength=len(self)).astype(bool)
 
+    @property
+    def angle_defects(self):
+        """(n,) array of angle defects at each vertex.
+        The angle defect is the difference of the sum of adjacent face angles from 2π.
+
+        On a topological sphere, the sum of the angle defects of all vertices is 4π.
+        >>> m = ico_sphere()
+        >>> assert isclose(m.vertices.angle_defects.sum(), 4*np.pi)
+        """
+        faces = self._mesh.faces
+        summed_angles = np.bincount(faces.ravel(), weights=faces.corner_angles.ravel())
+        defects = 2 * np.pi - summed_angles
+        # boundary vertices have zero angle defect
+        defects[self.boundaries] = 0
+        return defects
+
+    @property
+    def gaussian_curvatures(self):
+        """(n,) array of gaussian curvatures at each vertex."""
+        return self.angle_defects / self.voronoi_areas
+
 
 class Faces(Array, MeshData):
     def __new__(
@@ -264,7 +285,7 @@ class Faces(Array, MeshData):
     def centroids(self) -> Points:
         """(n, self.dimensions) `Points` of face centroids."""
         return Points(self.corners.mean(axis=1))
-    
+
     @property
     def cross_products(self):
         """(n, 3) array of cross products for each face."""
@@ -283,7 +304,7 @@ class Faces(Array, MeshData):
     def areas(self):
         """(n,) array of areas for each face."""
         return self.double_areas / 2
-    
+
     @property
     def voronoi_areas(self):
         """(n, 3) array of voronoi areas for each vertex of each face. Degenerate faces have area of 0."""
@@ -293,11 +314,15 @@ class Faces(Array, MeshData):
         # TODO: we are losing more precision than i would like...
         # TODO: also we could factor out cots as a separate method
         double_area = self.double_areas
-        with np.errstate(divide='ignore', invalid='ignore'):
-            cot_0 = np.einsum('ij,ij->i', e2, -e1) / double_area
-            cot_1 = np.einsum('ij,ij->i', e0, -e2) / double_area
-            cot_2 = np.einsum('ij,ij->i', e1, -e0) / double_area
-            sq_l0, sq_l1, sq_l2 = norm(e0, axis=1) ** 2, norm(e1, axis=1) ** 2, norm(e2, axis=1) ** 2
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cot_0 = np.einsum("ij,ij->i", e2, -e1) / double_area
+            cot_1 = np.einsum("ij,ij->i", e0, -e2) / double_area
+            cot_2 = np.einsum("ij,ij->i", e1, -e0) / double_area
+            sq_l0, sq_l1, sq_l2 = (
+                norm(e0, axis=1) ** 2,
+                norm(e1, axis=1) ** 2,
+                norm(e2, axis=1) ** 2,
+            )
             voronoi_areas = np.zeros((len(self), 3), dtype=np.float64)
             voronoi_areas[:, 0] = sq_l1 * cot_1 + sq_l2 * cot_2
             voronoi_areas[:, 1] = sq_l0 * cot_0 + sq_l2 * cot_2
@@ -306,9 +331,9 @@ class Faces(Array, MeshData):
         mask0 = cot_0 < 0.0
         mask1 = cot_1 < 0.0
         mask2 = cot_2 < 0.0
-        voronoi_areas[mask0] = np.array([0.5, 0.25, 0.25])[None, :] * double_area[mask0, None] * 0.5
-        voronoi_areas[mask1] = np.array([0.25, 0.5, 0.25])[None, :] * double_area[mask1, None] * 0.5
-        voronoi_areas[mask2] = np.array([0.25, 0.25, 0.5])[None, :] * double_area[mask2, None] * 0.5
+        voronoi_areas[mask0] = (np.array([0.5, 0.25, 0.25])[None, :] * double_area[mask0, None] * 0.5)
+        voronoi_areas[mask1] = (np.array([0.25, 0.5, 0.25])[None, :] * double_area[mask1, None] * 0.5)
+        voronoi_areas[mask2] = (np.array([0.25, 0.25, 0.5])[None, :] * double_area[mask2, None] * 0.5)
         voronoi_areas[self.degenerated] = 0.0
         return voronoi_areas
 
@@ -331,6 +356,7 @@ class Faces(Array, MeshData):
         """(n,) bool array of whether each face has a boundary edge."""
         edges = self._mesh.edges
         return np.isin(self, edges[edges.boundaries]).any(axis=1)
+
 
 class Edges(Array, MeshData):
     """A collection of unique edges."""
@@ -383,41 +409,50 @@ class Edges(Array, MeshData):
         return self.valences == 1
 
 
-
 def convex_hull(
     obj: TriangleMesh | Points,
     qhull_options: str = None,
     joggle_on_failure: bool = True,
 ):
     """Compute the convex hull of a set of points or mesh."""
+    mesh_type = TriangleMesh
 
     if isinstance(obj, TriangleMesh):
         points = obj.vertices[obj.vertices.referenced]
-    
+        mesh_type = type(obj)  # if obj is a subclass, return that type
+
     points = np.asanyarray(points)
-    
+
     try:
         hull = ConvexHull(points, qhull_options=qhull_options)
     except QhullError as e:
-        if joggle_on_failure: # TODO: add warning
+        if joggle_on_failure:
+            # TODO: this seems like it could easily break. maybe override options instead of appending?
+            qhull_options = "QJ " + (qhull_options or "")
             return convex_hull(points, qhull_options=qhull_options, joggle_on_failure=False)
         raise e
-    
+
     if points.shape[1] == 2:
         vertices = points[hull.vertices]
-        return TriangleMesh(vertices, Delaunay(vertices).simplices)
+        return mesh_type(vertices, Delaunay(vertices).simplices)
 
     # find the actual vertices and map them to the original points
     idx = np.sort(hull.vertices)
     faces = np.zeros(len(hull.points), dtype=np.float64)
     faces[idx] = np.arange(len(idx))
-    m = TriangleMesh(hull.points[idx], faces[hull.simplices])
+    m = mesh_type(hull.points[idx], faces[hull.simplices])
 
     # flip winding order of faces that are pointing inwards.
     flipped = np.einsum("ij,ij->i", m.faces.centroids - m.centroid, m.faces.normals) < 0
     fixed = np.where(flipped[:, None], m.faces[:, ::-1], m.faces)
 
-    return TriangleMesh(m.vertices, fixed)
+    return mesh_type(m.vertices, fixed)
+
+
+def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
+    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
+    referenced = mesh.vertices.referenced
+    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
 
 
 def tetrahedron():
