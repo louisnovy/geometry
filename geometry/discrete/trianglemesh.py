@@ -134,6 +134,62 @@ class Vertices(Points, MeshData):
         self._mesh = mesh
         return self
 
+    @property
+    def normals(self) -> Array:
+        """(n, 3) float array of unit normal vectors for each vertex.
+        Vertex normals are the mean of adjacent face normals weighted by area."""
+        faces = self._mesh.faces
+        incidence = self._mesh.vertex_face_incidence
+        # since we are about to unitize, we can simply multiply by area
+        vertex_normals = incidence @ (faces.normals * faces.areas[:, None])
+        return unitize(vertex_normals).view(Array)
+
+    @property
+    def areas(self):
+        """(n,) float array of lumped areas for each vertex.
+        The area of each vertex is 1/3 of the sum of the areas of the faces it is a part of.
+
+        Summed, this is equal to the total area of the mesh.
+        >>> m = ico_sphere()
+        >>> assert m.vertices.areas.sum() == m.faces.areas.sum() == m.area
+        """
+        return self._mesh.vertex_face_incidence @ self._mesh.faces.areas / 3
+
+    @property
+    def valences(self):
+        """(n,) int array of the valence of each vertex.
+
+        The valence of a vertex is the number of edges that meet at that vertex.
+        >>> m = box()
+        >>> m.vertices.valences
+        Array([5, 4, 5, 4, 5, 4, 5, 4])
+
+        The mean valence of an edge-manifold triangle mesh converges to 6 as faces increase.
+        >>> m = icosahedron()
+        >>> for i in range(5):
+        >>>     print(m.vertices.valences.mean())
+        >>>     m = m.subdivide()
+        5.0
+        5.714285714285714
+        5.925925925925926
+        5.981308411214953
+        5.995316159250586
+        """
+        # return self._mesh.vertex_face_incidence.sum(axis=1)
+        return np.bincount(self._mesh.faces.ravel(), minlength=len(self))
+
+    @property
+    def referenced(self):
+        """(n,) bool array of whether each vertex is part of the surface."""
+        return self.valences > 0
+
+    @property
+    def boundaries(self):
+        """(n,) bool array of whether each vertex is on a boundary."""
+        edges = self._mesh.edges
+        boundary_edges = edges[edges.boundaries]
+        return np.bincount(boundary_edges.ravel(), minlength=len(self)).astype(bool)
+
 
 class Faces(Array, MeshData):
     def __new__(
@@ -168,13 +224,13 @@ class Faces(Array, MeshData):
         res[:, 1] = np.arccos(np.clip(np.einsum("ij,ij->i", -u, w), -1, 1))
         # complement angle so we can take a shortcut
         res[:, 2] = np.pi - res[:, 0] - res[:, 1]
-        return res.view(Array)
+        return res
 
     @property
     def cross_products(self) -> Array:
         """(n, 3) array of cross products for each face."""
         v0, v1, v2 = self.corners_unpacked
-        return np.cross(v1 - v0, v2 - v0).view(Array)
+        return np.cross(v1 - v0, v2 - v0)
 
     @property
     def double_areas(self) -> Array:
@@ -182,7 +238,7 @@ class Faces(Array, MeshData):
         crossed = self.cross_products
         if self._mesh.dim == 2:
             crossed = np.expand_dims(crossed, axis=1)
-        return norm(crossed, axis=1).view(Array)
+        return norm(crossed, axis=1)
 
     @property
     def areas(self) -> Array:
@@ -193,7 +249,7 @@ class Faces(Array, MeshData):
     def degenerated(self) -> Array:
         return self.double_areas == 0
 
-    @cached_property
+    @property
     def normals(self) -> Array:
         """(n, 3) array of unit normal vectors for each face."""
         if self._mesh.dim == 2:
@@ -201,7 +257,7 @@ class Faces(Array, MeshData):
         with np.errstate(divide="ignore", invalid="ignore"):
             normals = (self.cross_products / self.double_areas[:, None]).view(np.ndarray)
         normals[np.isnan(normals)] = 0
-        return Array(normals)
+        return normals
 
 
 class Edges(Array, MeshData):
@@ -248,6 +304,11 @@ class Edges(Array, MeshData):
     def midpoints(self) -> Array:
         """`Points` of the midpoints of each edge."""
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
+
+    @property
+    def boundaries(self) -> Array:
+        """(n_edges,) bool array of whether each edge is a boundary edge."""
+        return self.valences == 1
 
 
 def tetrahedron():
