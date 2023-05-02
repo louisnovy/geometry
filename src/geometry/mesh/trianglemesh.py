@@ -1,10 +1,11 @@
 from __future__ import annotations
+from typing import Iterable
 from numpy.typing import ArrayLike
 from functools import cached_property
 
 import numpy as np
 from numpy.linalg import norm
-from scipy.sparse import csr_array, coo_array
+from scipy.sparse import csr_array, coo_array, csgraph
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 from ..points import Points
@@ -37,12 +38,12 @@ class TriangleMesh(Geometry):
         return self.vertices.dim
 
     @property
-    def num_vertices(self) -> int:
+    def n_vertices(self) -> int:
         """Number of vertices in the mesh."""
         return len(self.vertices)
 
     @property
-    def num_faces(self) -> int:
+    def n_faces(self) -> int:
         """Number of faces in the mesh."""
         return len(self.faces)
 
@@ -59,7 +60,7 @@ class TriangleMesh(Geometry):
         return Edges.from_halfedges(self.halfedges, mesh=self)
 
     @property
-    def num_edges(self) -> int:
+    def n_edges(self) -> int:
         """Number of unique edges in the mesh."""
         return len(self.edges)
 
@@ -68,7 +69,7 @@ class TriangleMesh(Geometry):
         """Euler characteristic of the mesh. https://en.wikipedia.org/wiki/Euler_characteristic
         Naive implementation and will give unexpected results for objects with multiple connected
         components or unreferenced vertices."""
-        return self.num_vertices - self.num_edges + self.num_faces
+        return self.n_vertices - self.n_edges + self.n_faces
 
     @property
     def genus(self) -> int:
@@ -103,7 +104,7 @@ class TriangleMesh(Geometry):
     @property
     def is_empty(self) -> bool:
         """True if no geometry is defined."""
-        return self.num_faces == 0 | self.num_vertices == 0
+        return self.n_faces == 0 | self.n_vertices == 0
 
     @property
     def is_finite(self) -> bool:
@@ -119,7 +120,7 @@ class TriangleMesh(Geometry):
     def is_closed(self):
         """True if all edges are shared by at least two faces.
         https://en.wikipedia.org/wiki/Closed_surface"""
-        if self.num_faces == 0: return False
+        if self.n_faces == 0: return False
         return np.all(self.edges.valences >= 2)
 
     @property
@@ -129,7 +130,7 @@ class TriangleMesh(Geometry):
     @property
     def is_edge_manifold(self) -> bool:
         """True if all edges are shared by exactly one or two faces."""
-        if self.num_faces == 0: return False
+        if self.n_faces == 0: return False
         valences = self.edges.valences
         return np.all((valences == 1) | (valences == 2))
 
@@ -165,11 +166,9 @@ class TriangleMesh(Geometry):
     def vertex_vertex_incidence(self) -> csr_array:
         """Sparse vertex-vertex incidence matrix."""
         edges = self.halfedges.reshape(-1, 2)
-        row = edges[:, 0]
-        col = edges[:, 1]
-        shape = (self.num_vertices, self.num_vertices)
+        shape = (self.n_vertices, self.n_vertices)
         data = np.ones(len(edges), dtype=bool)
-        return coo_array((data, (row, col)), shape=shape).tocsr()
+        return coo_array((data, edges.T), shape=shape).tocsr()
 
     @property
     def vertex_face_incidence(self) -> csr_array:
@@ -181,6 +180,11 @@ class TriangleMesh(Geometry):
         data = np.ones(len(row), dtype=bool)
         shape = (len(self.vertices), len(faces))
         return coo_array((data, (row, col)), shape=shape).tocsr()
+    
+    @property
+    def face_face_incidence(self) -> csr_array:
+        """Sparse face-face incidence matrix."""
+        raise NotImplementedError
 
     def vertices_adjacent_vertex(self, index: int):
         """Find the indices of vertices adjacent to the vertex at the given index.
@@ -461,7 +465,7 @@ class Edges(Array):
         _, index, counts = unique_rows(sorted_edges, return_index=True, return_counts=True)
         self = cls(sorted_edges[index], mesh=mesh)
         self.valences = counts
-        self.face_indices = np.repeat(np.arange(mesh.num_faces), mesh.faces.shape[1])[index]
+        self.face_indices = np.repeat(np.arange(mesh.n_faces), mesh.faces.shape[1])[index]
         self.boundaries = counts == 1
         return self
 
@@ -513,9 +517,33 @@ def submesh(mesh: TriangleMesh, face_indices: ArrayLike, invert: bool = False) -
     If `invert` is True, return a mesh with all faces *except* those in `face_indices`."""
     face_indices = np.asanyarray(face_indices)
     if invert:
-        face_indices = np.setdiff1d(np.arange(mesh.num_faces), face_indices)
+        face_indices = np.setdiff1d(np.arange(mesh.n_faces), face_indices)
     m = type(mesh)(mesh.vertices, mesh.faces[face_indices])
     return remove_unreferenced_vertices(m)
+
+
+def separate(mesh: TriangleMesh, method="vertex") -> list:
+    """Return a list of meshes, each representing a connected component of the mesh."""
+    if method == "vertex":
+        incidence = mesh.vertex_vertex_incidence
+    elif method == "face":
+        incidence = mesh.face_face_incidence
+    
+    cc = csgraph.connected_components(incidence, directed=False)[1]
+    
+    return [submesh(mesh, np.isin(mesh.faces, np.where(cc == i)[0]).any(axis=1)) for i in np.unique(cc)]
+
+
+def concatenate(meshes: Iterable[TriangleMesh]) -> TriangleMesh:
+    """Concatenate a list of meshes into a single mesh with multiple connected components."""
+    if not all(isinstance(m, type(meshes[0])) for m in meshes):
+        raise ValueError(f"Meshes must all be of the same type: {type(meshes[0])}")
+    
+    indices = np.cumsum([0] + [m.n_vertices for m in meshes])
+    vertices = np.concatenate([m.vertices for m in meshes])
+    faces = np.concatenate([m.faces + indices[i] for i, m in enumerate(meshes)])
+
+    return type(meshes[0])(vertices, faces)
 
 
 def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> TriangleMesh:

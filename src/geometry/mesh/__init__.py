@@ -1,8 +1,4 @@
-from .trianglemesh import (
-    TriangleMesh,
-    load,
-    save,
-)
+from .trianglemesh import *
 
 from .primitives import (
     ngon,

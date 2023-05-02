@@ -24,17 +24,6 @@ def box(min=(-1, -1, -1), max=(1, 1, 1)):
     a, b = np.asanyarray(min), np.asanyarray(max)
     if not a.shape == b.shape == (3,):
         raise ValueError("min and max must be 3D vectors")
-    # vertices = [
-    #     (a[0], a[1], a[2]),
-    #     (b[0], a[1], a[2]),
-    #     (b[0], b[1], a[2]),
-    #     (a[0], b[1], a[2]),
-    #     (a[0], a[1], b[2]),
-    #     (b[0], a[1], b[2]),
-    #     (b[0], b[1], b[2]),
-    #     (a[0], b[1], b[2]),
-    # ]
-    # fix winding
     vertices = [
         (a[2], a[1], a[0]),
         (a[2], b[1], a[0]),
