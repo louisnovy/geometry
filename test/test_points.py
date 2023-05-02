@@ -1,5 +1,5 @@
 import unittest
-from geometry.discrete import Points, TriangleMesh
+from geometry.points import Points
 import numpy as np
 
 class TestPoints(unittest.TestCase):

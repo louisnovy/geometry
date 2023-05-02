@@ -7,11 +7,11 @@ from numpy.linalg import norm
 from scipy.sparse import csr_array, coo_array
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
-from .points import Points
+from ..points import Points
 from ..base import Geometry
 from ..bounds import AABB
-from ..utils import Array, unique_rows_2d, unitize
-
+from ..utils import Array, unique_rows, unitize
+from ..formats import stl
 
 class TriangleMesh(Geometry):
     def __init__(
@@ -23,8 +23,13 @@ class TriangleMesh(Geometry):
         self.faces: Faces = Faces(faces, mesh=self)
 
     @classmethod
-    def empty(cls, dim: int):
-        return cls(vertices=Vertices.empty(dim))
+    def load(cls, path: str, **kwargs):
+        """Load a mesh from a file."""
+        return load(path, **kwargs)
+    
+    def save(self, path: str, **kwargs):
+        """Save a mesh to a file."""
+        return save(path, self, **kwargs)
 
     @property
     def dim(self):
@@ -247,7 +252,7 @@ class Vertices(Points):
 
     @property
     def voronoi_areas(self):
-        """(n,) array of the areas of the voronoi cells associated with each vertex."""
+        """(n,) array of the areas of the voronoi cells around each vertex."""
         faces = self._mesh.faces
         return np.bincount(faces.ravel(), weights=faces.voronoi_areas.ravel(), minlength=len(self))
 
@@ -318,6 +323,8 @@ class Faces(Array):
             faces = np.empty((0, 3), dtype=np.int32)
         self = super().__new__(cls, faces, dtype=np.int32)
         self._mesh = mesh
+        if self.shape[1] != 3:
+            raise ValueError("Faces must be triangles.")
         return self
 
     @cached_property
@@ -349,7 +356,7 @@ class Faces(Array):
 
     @property
     def centroids(self) -> Points:
-        """(n, self.dimensions) `Points` of face centroids."""
+        """`(n, dim) `Points` of face centroids."""
         return Points(self.corners.mean(axis=1))
 
     @property
@@ -411,7 +418,7 @@ class Faces(Array):
     def normals(self):
         """(n, 3) array of unit normal vectors for each face."""
         if self._mesh.dim == 2:
-            raise NotImplementedError("TODO: implement for 2D meshes")
+            raise NotImplementedError("implement for 2D meshes?")
         with np.errstate(divide="ignore", invalid="ignore"):
             normals = (self.cross_products / self.double_areas[:, None]).view(np.ndarray)
         normals[np.isnan(normals)] = 0
@@ -451,7 +458,7 @@ class Edges(Array):
     ) -> Edges:
         """Create an `Edges` object from an array of halfedges."""
         sorted_edges = np.sort(halfedges.reshape(-1, 2), axis=1)
-        _, index, counts = unique_rows_2d(sorted_edges, return_index=True, return_counts=True)
+        _, index, counts = unique_rows(sorted_edges, return_index=True, return_counts=True)
         self = cls(sorted_edges[index], mesh=mesh)
         self.valences = counts
         self.face_indices = np.repeat(np.arange(mesh.num_faces), mesh.faces.shape[1])[index]
@@ -478,6 +485,53 @@ class Edges(Array):
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
 
 
+def load(
+    filename: str,
+    **kwargs,
+) -> TriangleMesh:
+    """Load a mesh from a file."""
+    return merge_duplicate_vertices(TriangleMesh(*stl.load(filename, **kwargs)))
+
+
+def save(
+    filename: str,
+    mesh: TriangleMesh,
+    **kwargs,
+):
+    """Save a mesh to a file."""
+    stl.save(filename, mesh.vertices, mesh.faces, **kwargs)
+
+
+def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
+    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
+    referenced = mesh.vertices.referenced
+    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
+
+
+def submesh(mesh: TriangleMesh, face_indices: ArrayLike, invert: bool = False) -> TriangleMesh:
+    """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
+    If `invert` is True, return a mesh with all faces *except* those in `face_indices`."""
+    face_indices = np.asanyarray(face_indices)
+    if invert:
+        face_indices = np.setdiff1d(np.arange(mesh.num_faces), face_indices)
+    m = type(mesh)(mesh.vertices, mesh.faces[face_indices])
+    return remove_unreferenced_vertices(m)
+
+
+def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> TriangleMesh:
+    """Merge duplicate vertices closer than rounding error 'epsilon'.
+
+    Note: This will NOT remove faces and only renumbers the indices. This creates
+    duplicate and degenerate faces. This operation is mainly used for snapping together
+    a triangle soup like an stl file."""
+    vertices, faces = mesh.vertices, mesh.faces
+
+    if epsilon > 0:
+        vertices = vertices.round(int(-np.log10(epsilon)))
+
+    unique, index, inverse = unique_rows(vertices, return_index=True, return_inverse=True)
+    return type(mesh)(unique, inverse[faces])
+
 
 def convex_hull(
     obj: TriangleMesh | Points,
@@ -485,24 +539,24 @@ def convex_hull(
     joggle_on_failure: bool = True,
 ):
     """Compute the convex hull of a set of points or mesh."""
-
     mesh_type = TriangleMesh
     if isinstance(obj, TriangleMesh):
         points = obj.vertices
-        mesh_type = type(obj)  # if obj is a subclass, return that type
-
-    points = np.asanyarray(points)
+        mesh_type = type(obj)  # if mesh is a subclass, return that type
+    else:
+        points = np.asanyarray(points)
 
     try:
         hull = ConvexHull(points, qhull_options=qhull_options)
     except QhullError as e:
-        if joggle_on_failure:
+        if joggle_on_failure and "QJ" not in qhull_options:
             # TODO: this seems like it could easily break. maybe override options instead of appending?
             qhull_options = "QJ " + (qhull_options or "")
             return convex_hull(points, qhull_options=qhull_options, joggle_on_failure=False)
         raise e
 
     if points.shape[1] == 2:
+        # TODO: check orientation correctness for 2d
         vertices = points[hull.vertices]
         return mesh_type(vertices, Delaunay(vertices).simplices)
 
@@ -519,258 +573,26 @@ def convex_hull(
     return mesh_type(m.vertices, fixed)
 
 
-def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
-    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
-    referenced = mesh.vertices.referenced
-    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
+# TODO: naive implementation. optionally use distance weights, constrain volume, etc.
+def smooth_laplacian(
+    mesh: TriangleMesh, 
+    iterations: int = 1,
+) -> TriangleMesh:
+    incidence = mesh.vertex_vertex_incidence
+    vertices = mesh.vertices.copy()
+
+    for _ in range(iterations):
+        vertices = (incidence @ vertices) / incidence.sum(axis=1)[:, None]
+
+    return type(mesh)(vertices, mesh.faces)
 
 
-def ngon(n=6, radius=1, angle=0) -> TriangleMesh:
-    """Regular `n`-gon centered at the origin."""
-    if not n >= 3: raise ValueError("ngons must have at least 3 sides")
-    verts = np.empty((n, 3))
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False) + angle
-    verts[:, 0] = np.cos(angles) * radius
-    verts[:, 1] = np.sin(angles) * radius
-    verts[:, 2] = 0
-    faces = np.empty((n, 3), dtype=int)
-    faces[:, 0] = np.arange(n)
-    faces[:, 1] = np.roll(np.arange(n), -1)
-    faces[:, 2] = n
-    return TriangleMesh(verts, faces)
-
-
-def tetrahedron():
-    """Tetrahedron centered at the origin."""
-    s = 1.0 / np.sqrt(2.0)
-    vertices = [(-1.0, 0.0, -s), (1.0, 0.0, -s), (0.0, 1.0, s), (0.0, -1.0, s)]
-    faces = [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)]
-    return TriangleMesh(Array(vertices) * 0.5, faces)
-
-
-def octahedron():
-    """Octahedron centered at the origin."""
-    return uv_sphere(u=4, v=2)
-
-
-def icosahedron():
-    """Unit icosahedron centered at the origin."""
-
-    a = 0.525731112119133606025669084848876
-    b = 0.850650808352039932181540497063011
-    c = 0.0
-
-    vertices = [
-        (-a, b, c),
-        (a, b, c),
-        (-a, -b, c),
-        (a, -b, c),
-        (c, -a, b),
-        (c, a, b),
-        (c, -a, -b),
-        (c, a, -b),
-        (b, c, -a),
-        (b, c, a),
-        (-b, c, -a),
-        (-b, c, a),
-    ]
-
-    faces = [
-        (0, 11, 5),
-        (0, 5, 1),
-        (0, 1, 7),
-        (0, 7, 10),
-        (0, 10, 11),
-        (1, 5, 9),
-        (5, 11, 4),
-        (11, 10, 2),
-        (10, 7, 6),
-        (7, 1, 8),
-        (3, 9, 4),
-        (3, 4, 2),
-        (3, 2, 6),
-        (3, 6, 8),
-        (3, 8, 9),
-        (4, 9, 5),
-        (2, 4, 11),
-        (6, 2, 10),
-        (8, 6, 7),
-        (9, 8, 1),
-    ]
-
-    return TriangleMesh(vertices, faces)
-
-
-# TODO: api should be cone(p0, p1, radius, n, cap=True)
-def cone(n: int, cap=True):
-    verts = np.zeros((n + 2, 3))
-
-    verts[0] = (0, 0, 1)
-    verts[-1] = (0, 0, 0)
-
-    verts[1:-1, 0] = np.cos(np.linspace(0, 2 * np.pi, n, endpoint=False))
-    verts[1:-1, 1] = np.sin(np.linspace(0, 2 * np.pi, n, endpoint=False))
-
-    faces = np.zeros((n + (n if cap else 0), 3), dtype=np.int32)
-    faces[:n, 0] = 0
-    faces[:n, 1] = np.arange(1, n + 1)
-    faces[:n, 2] = np.roll(faces[:n, 1], -1)
-
-    if cap:
-        faces[n:, 0] = np.arange(1, n + 1)
-        faces[n:, 1] = n + 1
-        faces[n:, 2] = np.roll(faces[n:, 0], -1)
-
-    return TriangleMesh(verts, faces)
-
-
-# TODO: api should be cylinder(p0, p1, r0, r1, n, cap=True)
-def cylinder(n: int, cap=True):
-    verts = np.zeros((n * 2, 3))
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
-
-    # top ring
-    verts[n:, 0] = np.cos(angles)
-    verts[n:, 1] = np.sin(angles)
-    verts[n:, 2] = 1
-
-    # bottom ring
-    verts[:n, 0] = np.cos(angles)
-    verts[:n, 1] = np.sin(angles)
-    verts[:n, 2] = 0
-
-    faces = np.zeros((n * 2, 3), dtype=np.int32)
-
-    # connect rings with triangles
-    faces[:n, 0] = np.arange(n)
-    faces[:n, 1] = np.roll(faces[:n, 0], -1)
-    faces[:n, 2] = faces[:n, 0] + n
-    faces[n:, 0] = faces[:n, 1]
-    faces[n:, 1] = faces[:n, 1] + n
-    faces[n:, 2] = faces[:n, 0] + n
-
-    if cap:
-        # centers
-        verts = np.concatenate([verts, np.array([[0, 0, 0], [0, 0, 1]])], axis=0)
-
-        cap1 = np.zeros((n, 3), dtype=np.int32)
-        cap1[:, 0] = np.arange(n)
-        cap1[:, 1] = n * 2
-        cap1[:, 2] = np.roll(cap1[:, 0], -1)
-
-        cap2 = np.zeros((n, 3), dtype=np.int32)
-        cap2[:, 0] = np.arange(n, n * 2)
-        cap2[:, 1] = n * 2 + 1
-        cap2[:, 2] = np.roll(cap2[:, 0], 1)
-
-        faces = np.concatenate([faces, cap1, cap2], axis=0)
-
-    return TriangleMesh(verts, faces)
-
-
-def uv_sphere(u=32, v=16):
-    """
-    `TriangleMesh` approximating a unit sphere centered at the origin
-    by using a UV parameterization.
-
-    Args:
-        u: Number of segments along the longitude.
-        v: Number of segments along the latitude.
-    """
-    verts = np.zeros((u * (v - 1) + 2, 3))
-
-    verts[-2, :] = (0, 0, 1)  # top pole
-    verts[-1, :] = (0, 0, -1)  # bottom pole
-
-    # body
-    i, j = np.indices((v - 1, u))
-    v_angle = np.pi * (i + 1) / v
-    u_angle = 2 * np.pi * j / u
-    verts[:-2] = np.stack(( # all but the poles
-        np.cos(u_angle) * np.sin(v_angle),
-        np.sin(u_angle) * np.sin(v_angle),
-        np.cos(v_angle)
-    ), axis=-1).reshape(-1, 3)
-
-    vlen = len(verts)
-    faces = np.zeros((2 * u + 2 * (v - 2) * u, 3), dtype=np.int32)
-
-    # fans for the poles
-    faces[:u, 0] = np.arange(u)
-    faces[:u, 1] = np.roll(faces[:u, 0], -1)
-    faces[:u, 2] = vlen - 2
-
-    faces[u : 2 * u, 0] = np.arange(u) + (v - 2) * u
-    faces[u : 2 * u, 1] = np.roll(faces[u : 2 * u, 0], 1)
-    faces[u : 2 * u, 2] = vlen - 1
-
-    # indices of quads
-    i, j = np.indices((v - 2, u))
-    a = i * u + j
-    b = (i + 1) * u + (j + 1) % u
-    c = i * u + (j + 1) % u
-    d = (i + 1) * u + j
-
-    # triangle a, b, c
-    idx = 2 * u + i * u + j
-    faces[idx, 0] = a
-    faces[idx, 1] = b
-    faces[idx, 2] = c
-
-    # triangle a, d, b
-    idx = 2 * u + (v - 2) * u + i * u + j
-    faces[idx, 0] = a
-    faces[idx, 1] = d
-    faces[idx, 2] = b
-
-    return TriangleMesh(verts, faces)
-
-
-def torus(
-    tube_radius=0.5,
-    u=16,
-    v=32,
-):
-    """
-    `TriangleMesh` approximating a torus centered at the origin by using a UV
-    parameterization.
-
-    Args:
-        tube_radius: Radius of the tube.
-        u: Number of segments along the tube.
-        v: Number of segments along the ring.
-    """
-    if not all([u > 2, v > 2]): raise ValueError("u and v must be greater than 2")
-    verts = np.zeros((u * v, 3))
-
-    idx = np.arange(u * v)
-    i, j = divmod(idx, u)
-    u_angle = 2 * np.pi * j / u
-    v_angle = 2 * np.pi * i / v
-
-    verts[:, 0] = (1 + tube_radius * np.cos(u_angle)) * np.cos(v_angle)
-    verts[:, 1] = (1 + tube_radius * np.cos(u_angle)) * np.sin(v_angle)
-    verts[:, 2] = tube_radius * np.sin(u_angle)
-
-    faces = np.zeros((2 * u * v, 3), dtype=np.int32)
-
-    # indices of quads
-    i, j = np.indices((v, u))
-    a = i * u + j
-    b = ((i + 1) % v) * u + j
-    c = ((i + 1) % v) * u + ((j + 1) % u)
-    d = i * u + ((j + 1) % u)
-
-    # triangle a, b, c
-    idx = i * u + j
-    faces[idx, 0] = a
-    faces[idx, 1] = b
-    faces[idx, 2] = c
-
-    # triangle a, c, d
-    idx += u * v
-    faces[idx, 0] = a
-    faces[idx, 1] = c
-    faces[idx, 2] = d
-
-    return TriangleMesh(verts, faces)
+# def smooth_taubin(
+#     mesh: TriangleMesh,
+#     iterations: int = 1,
+#     lamb: float = 0.5,
+#     mu: float = -0.53,
+# ) -> TriangleMesh:
+#     """Smooth a mesh using the Taubin lambda-mu method."""
+#     incidence = mesh.vertex_vertex_incidence
+#     vertices = mesh.vertices.copy()

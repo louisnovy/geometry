@@ -94,30 +94,27 @@ class Array(np.ndarray):
     del _validate
 
 
-# TODO: test libigl unique_rows
-def unique_rows_2d(
-    array: Array, return_index=False, return_inverse=False, return_counts=False
-) -> Array:
-    """A significantly faster version of np.unique(array, axis=0, **kwargs) for 2D arrays.
+def unique_rows(a:np.ndarray, return_index=False, return_inverse=False, return_counts=False):
+    """A significantly faster version of np.unique(array, axis=0, **kwargs). For 2D arrays.
     https://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array"""
-    array = np.asanyarray(array)
-    if not array.ndim == 2:
-        raise ValueError(f"array must be 2D, got {array.ndim}D")
-    order = np.lexsort(array.T)
-    array = array[order]
-    diff = np.diff(array, axis=0)
-    ui = np.ones(len(array), "bool")
-    ui[1:] = (diff != 0).any(axis=1)
+    a = np.asanyarray(a)
+    if not a.ndim == 2:
+        raise ValueError(f"array must be 2D, got {a.ndim}D")
+    b = a.view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
+    _, idx, inv = np.unique(b, return_index=True, return_inverse=True)
+    idx.sort()
+    ui = np.ones(len(a), bool)
+    ui[idx] = False
     if return_index or return_inverse or return_counts:
-        result = (array[ui],)
+        result = [a[idx]]
         if return_index:
-            result += (order[ui],)
+            result.append(idx)
         if return_inverse:
-            result += (order,)
+            result.append(inv)
         if return_counts:
-            result += (np.diff(np.append(np.where(ui)[0], len(array))),)
-        return result
-    return array[ui]
+            result.append(np.diff(np.append(np.where(ui)[0], len(a))))
+        return tuple(result)
+    return a[idx]
 
 
 def unitize(array: np.ndarray, axis=-1, nan=0.0) -> np.ndarray:

@@ -12,6 +12,8 @@ def main():
         install_requires=["numpy", "scipy", "xxhash"],
         extras_require={"testing": ["pytest"], "dev": ["pytest", "pre-commit"]},
         packages=["geometry"],
+        package_dir={"": "src"},
+        test_suite="test",
     )
 
 
