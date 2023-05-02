@@ -12,7 +12,7 @@ from ..points import Points
 from ..base import Geometry
 from ..bounds import AABB
 from ..utils import Array, unique_rows, unitize
-from ..formats import stl
+from ..formats import load_mesh as load, save_mesh as save
 
 class TriangleMesh(Geometry):
     def __init__(
@@ -22,15 +22,6 @@ class TriangleMesh(Geometry):
     ):
         self.vertices: Vertices = Vertices(vertices, mesh=self)
         self.faces: Faces = Faces(faces, mesh=self)
-
-    @classmethod
-    def load(cls, path: str, **kwargs):
-        """Load a mesh from a file."""
-        return load(path, **kwargs)
-    
-    def save(self, path: str, **kwargs):
-        """Save a mesh to a file."""
-        return save(path, self, **kwargs)
 
     @property
     def dim(self):
@@ -487,23 +478,6 @@ class Edges(Array):
     def midpoints(self):
         """`Points` of the midpoints of each edge."""
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
-
-
-def load(
-    filename: str,
-    **kwargs,
-) -> TriangleMesh:
-    """Load a mesh from a file."""
-    return merge_duplicate_vertices(TriangleMesh(*stl.load(filename, **kwargs)))
-
-
-def save(
-    filename: str,
-    mesh: TriangleMesh,
-    **kwargs,
-):
-    """Save a mesh to a file."""
-    stl.save(filename, mesh.vertices, mesh.faces, **kwargs)
 
 
 def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
