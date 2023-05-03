@@ -15,6 +15,7 @@ from ..bounds import AABB
 from ..utils import TrackedArray, unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
 
+
 class TriangleMesh(Geometry):
     def __init__(
         self,
@@ -682,7 +683,7 @@ def smooth_taubin(
 
 def dilate(mesh: TriangleMesh, offset: float) -> TriangleMesh:
     """Dilate by `offset` along vertex normals. May introduce self-intersections."""
-    return type(mesh)(mesh.vertices + offset * mesh.vertex_normals, mesh.faces)
+    return type(mesh)(mesh.vertices + offset * mesh.vertices.normals, mesh.faces)
 
 
 def erode(mesh: TriangleMesh, offset: float) -> TriangleMesh:
