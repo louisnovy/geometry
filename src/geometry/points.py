@@ -10,7 +10,6 @@ from .bounds import AABB
 
 class Points(TrackedArray, Geometry):
     """A collection of points in n-dimensional space."""
-
     def __new__(
         cls,
         points: ArrayLike,
@@ -53,12 +52,6 @@ class Points(TrackedArray, Geometry):
     @property
     def kdtree(self) -> cKDTree:
         return cKDTree(self)
-    
-    def downsample_poisson(self, radius: float) -> Points:
-        return downsample_poisson(self, radius)
-    
-    def downsample_grid(self, pitch: float) -> Points:
-        return downsample_grid(self, pitch)
 
 
 def downsample_poisson(points: Points, radius: float) -> Points:
