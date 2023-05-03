@@ -4,6 +4,7 @@ from numpy.typing import ArrayLike
 from functools import cached_property
 
 import numpy as np
+from numpy import isclose
 from numpy.linalg import norm
 from scipy.sparse import csr_array, coo_array, csgraph
 from scipy.spatial import ConvexHull, Delaunay, QhullError
@@ -294,7 +295,7 @@ class Vertices(Points):
         >>> assert isclose(m.vertices.angle_defects.sum(), 4*np.pi)
         """
         faces = self._mesh.faces
-        summed_angles = np.bincount(faces.ravel(), weights=faces.angles.ravel())
+        summed_angles = np.bincount(faces.ravel(), weights=faces.internal_angles.ravel())
         defects = 2 * np.pi - summed_angles
         # boundary vertices have zero angle defect
         defects[self.boundaries] = 0
@@ -334,7 +335,7 @@ class Faces(TrackedArray):
         return self._mesh.vertices.view(np.ndarray)[self]
 
     @property
-    def angles(self):
+    def internal_angles(self):
         """(n, 3) array of corner angles for each face."""
         a, b, c = np.rollaxis(self.corners, 1)
         u, v, w = unitize(b - a), unitize(c - a), unitize(c - b)
@@ -425,6 +426,60 @@ class Faces(TrackedArray):
         edges = self._mesh.edges
         return np.isin(self, edges[edges.boundaries]).any(axis=1)
 
+    @property
+    def edge_lengths(self) -> np.ndarray:
+        """(n, 3) array of edge lengths for each face."""
+        v0, v1, v2 = np.rollaxis(self.corners, 1)
+        return np.array([norm(v1 - v0, axis=1), norm(v2 - v1, axis=1), norm(v0 - v2, axis=1)]).T
+
+    @cached_property
+    def edge_lengths_squared(self) -> np.ndarray:
+        """(n, 3) array of squared edge lengths for each face."""
+        a, b, c = self.edge_lengths.T
+        return np.array([a**2, b**2, c**2]).T
+
+    @cached_property
+    def obtuse(self) -> np.ndarray[bool]:
+        """(n,) array of booleans indicating whether each face is an obtuse triangle."""
+        a2, b2, c2 = self.edge_lengths_squared.T
+        # obtuse if one edge is longer than the sum of the other two
+        return (a2 > b2 + c2) | (b2 > a2 + c2) | (c2 > a2 + b2) & ~self.right
+
+    @cached_property
+    def acute(self) -> np.ndarray[bool]:
+        """(n,) array of booleans indicating whether each face is an acute triangle."""
+        a2, b2, c2 = self.edge_lengths_squared.T
+        # acute if all edges are shorter than the sum of the other two
+        return (a2 < b2 + c2) & (b2 < a2 + c2) & (c2 < a2 + b2) & ~self.right
+
+    @cached_property
+    def right(self) -> np.ndarray[bool]:
+        """(n,) array of booleans indicating whether each face is a right triangle."""
+        a2, b2, c2 = self.edge_lengths_squared.T
+        # right if one edge is the hypotenuse of the other two
+        return isclose(a2, b2 + c2) | isclose(b2, a2 + c2) | isclose(c2, a2 + b2)
+
+    @cached_property
+    def equilateral(self) -> np.ndarray[bool]:
+        """(n,) array of booleans indicating whether each face is equilateral."""
+        a, b, c = self.edge_lengths.T
+        # equilateral if all edges are the same length
+        return isclose(a, b) & isclose(b, c)
+
+    @cached_property
+    def isosceles(self) -> np.ndarray[bool]:
+        """(n,) array of booleans indicating whether each face is isosceles."""
+        a, b, c = self.edge_lengths.T
+        # isosceles if two or more edges are the same length
+        return isclose(a, b) | isclose(b, c) | isclose(c, a)
+
+    @cached_property
+    def scalene(self) -> np.ndarray[bool]:
+        """(n,) array of booleans indicating whether each face is scalene."""
+        a, b, c = self.edge_lengths.T
+        # scalene if no edges are the same length
+        return ~isclose(a, b) & ~isclose(b, c) & ~isclose(c, a)
+
 
 class Edges(TrackedArray):
     """(n, 2) array of unique edges. Each row is a pair of vertex indices."""
@@ -497,9 +552,9 @@ def separate(mesh: TriangleMesh, method="vertex") -> list:
     elif method == "face":
         incidence = mesh.face_face_incidence
     
-    cc = csgraph.connected_components(incidence, directed=False)[1]
-    
-    return [submesh(mesh, np.isin(mesh.faces, np.where(cc == i)[0]).any(axis=1)) for i in np.unique(cc)]
+    n_components, labels = csgraph.connected_components(incidence, directed=False)
+
+    return [submesh(mesh, np.where(labels == i)[0]) for i in range(n_components)]
 
 
 def concatenate(meshes: Iterable[TriangleMesh]) -> TriangleMesh:
@@ -523,9 +578,9 @@ def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
 def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> TriangleMesh:
     """Merge duplicate vertices closer than rounding error 'epsilon'.
 
-    Note: This will NOT remove faces and only renumbers the indices. This creates
-    duplicate and degenerate faces. This operation is mainly used for snapping together
-    a triangle soup like an stl file."""
+    Note: This will NOT remove faces and only renumbers the indices creating
+    duplicate and degenerate faces if epsilon is not kept in check.
+    This operation is mainly used for snapping together a triangle soup like an stl file."""
     vertices, faces = mesh.vertices, mesh.faces
 
     if epsilon > 0:
