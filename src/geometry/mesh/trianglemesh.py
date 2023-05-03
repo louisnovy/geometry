@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Iterable
+from typing import Iterable, Literal
 from numpy.typing import ArrayLike
 from functools import cached_property
 
@@ -480,12 +480,6 @@ class Edges(TrackedArray):
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
 
 
-def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
-    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
-    referenced = mesh.vertices.referenced
-    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
-
-
 def submesh(mesh: TriangleMesh, face_indices: ArrayLike, invert: bool = False) -> TriangleMesh:
     """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
     If `invert` is True, return a mesh with all faces *except* those in `face_indices`."""
@@ -520,6 +514,12 @@ def concatenate(meshes: Iterable[TriangleMesh]) -> TriangleMesh:
     return type(meshes[0])(vertices, faces)
 
 
+def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
+    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
+    referenced = mesh.vertices.referenced
+    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
+
+
 def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> TriangleMesh:
     """Merge duplicate vertices closer than rounding error 'epsilon'.
 
@@ -533,6 +533,38 @@ def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> Triangle
 
     unique, index, inverse = unique_rows(vertices, return_index=True, return_inverse=True)
     return type(mesh)(unique, inverse[faces])
+
+
+def remove_duplicate_faces(mesh: TriangleMesh) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def resolve_self_intersection(mesh: TriangleMesh) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def subdivide_midpoint(mesh: TriangleMesh) -> TriangleMesh:
+    """Subdivide by inserting a vertex at the midpoint of each edge
+    and connecting the new vertices to form four triangles from each
+    original triangle. This does not change the surface of the mesh."""
+    raise NotImplementedError
+
+
+def subdivide_loop(mesh: TriangleMesh) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def split_long_edges(mesh: TriangleMesh, threshold: float) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def collapse_short_edges(mesh: TriangleMesh, threshold: float) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def invert_faces(mesh: TriangleMesh) -> TriangleMesh:
+    """Reverse the winding order of all faces which flips the mesh "inside out"."""
+    return type(mesh)(mesh.vertices, mesh.faces[:, ::-1])
 
 
 def convex_hull(
@@ -589,12 +621,81 @@ def smooth_laplacian(
     return type(mesh)(vertices, mesh.faces)
 
 
-# def smooth_taubin(
-#     mesh: TriangleMesh,
-#     iterations: int = 1,
-#     lamb: float = 0.5,
-#     mu: float = -0.53,
-# ) -> TriangleMesh:
-#     """Smooth a mesh using the Taubin lambda-mu method."""
-#     incidence = mesh.vertex_vertex_incidence
-#     vertices = mesh.vertices.copy()
+def smooth_taubin(
+    mesh: TriangleMesh,
+    iterations: int = 1,
+    lamb: float = 0.5,
+    mu: float = -0.53,
+) -> TriangleMesh:
+    """Smooth a mesh using the Taubin lambda-mu method."""
+    raise NotImplementedError
+
+
+def dilate(mesh: TriangleMesh, offset: float) -> TriangleMesh:
+    """Dilate by `offset` along vertex normals. May introduce self-intersections."""
+    return type(mesh)(mesh.vertices + offset * mesh.vertex_normals, mesh.faces)
+
+
+def erode(mesh: TriangleMesh, offset: float) -> TriangleMesh:
+    """Erode by `offset` along vertex normals. May introduce self-intersections."""
+    return dilate(mesh, -offset)
+
+
+def union(
+    a: TriangleMesh,
+    b: TriangleMesh,
+) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def intersection(
+    a: TriangleMesh,
+    b: TriangleMesh,
+    clip: bool = False
+) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def difference(
+    a: TriangleMesh,
+    b: TriangleMesh,
+    clip: bool = False
+) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def sample_surface(
+    mesh: TriangleMesh,
+    count: int,
+    face_weights: np.ndarray | None = None,
+    return_index: bool = False,
+    sample_attributes: Literal["vertex", "face", None] = None,
+) -> Points | tuple[Points, np.ndarray]:
+    """Sample points from the surface of a mesh."""
+    if mesh.is_empty:
+        raise ValueError("Cannot sample from an empty mesh.")
+    if face_weights is None:
+        double_areas = mesh.faces.double_areas
+        face_weights = double_areas / double_areas.sum()
+    else:
+        face_weights = np.asarray(face_weights)
+        if not all([
+            face_weights.ndim == 1,
+            len(face_weights) == len(mesh.faces),
+            np.allclose(face_weights.sum(), 1),
+        ]):
+            raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
+
+    rng = np.random.default_rng()
+    # distribute count samples uniformly on the barycentric simplex
+    barycentric = rng.dirichlet(np.ones(3), size=count)
+    # choose a random face for each sample to map to
+    face_indices = rng.choice(len(mesh.faces), size=count, p=face_weights)
+    # map onto faces with a linear combination of the face's corners
+    samples = np.einsum("ij,ijk->ik", barycentric, mesh.faces.corners[face_indices])
+
+    if sample_attributes is not None:
+        # TODO: when attributes are implemented, float vertex attributes should be interpolated
+        raise NotImplementedError
+
+    return (samples, face_indices) if return_index else samples

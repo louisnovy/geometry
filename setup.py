@@ -14,6 +14,7 @@ def main():
         packages=["geometry"],
         package_dir={"": "src"},
         test_suite="test",
+        python_requires=">=3.8",
     )
 
 
