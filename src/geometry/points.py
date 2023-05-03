@@ -4,11 +4,11 @@ from numpy.typing import ArrayLike
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .utils import Array, unique_rows
+from .utils import TrackedArray, unique_rows
 from .base import Geometry
 from .bounds import AABB
 
-class Points(Array, Geometry):
+class Points(TrackedArray, Geometry):
     """A collection of points in n-dimensional space."""
 
     def __new__(

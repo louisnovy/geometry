@@ -4,7 +4,7 @@ from xxhash import xxh3_64_intdigest
 import numpy as np
 
 
-class Array(np.ndarray):
+class TrackedArray(np.ndarray):
     """An array that can be hashed based on its contents.
 
     This is a subclass of a numpy ndarray, and can be used in place of one. It can be constructed from
@@ -30,7 +30,7 @@ class Array(np.ndarray):
     TrackedArray([1, 2, 3])
     """
 
-    def __new__(cls, *args, **kwargs) -> Array:
+    def __new__(cls, *args, **kwargs) -> TrackedArray:
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
         return np.ascontiguousarray(*args, **kwargs).view(cls)
 
@@ -60,10 +60,10 @@ class Array(np.ndarray):
 
     # helper that will make a new version of a method that invalidates hash
     def _validate(method: str) -> Callable:
-        def f(self: Array, *args, **kwargs):
+        def f(self: TrackedArray, *args, **kwargs):
             if hasattr(self, "_hash"):
                 del self._hash
-            return getattr(super(Array, self), method)(*args, **kwargs)
+            return getattr(super(TrackedArray, self), method)(*args, **kwargs)
 
         return f
 
