@@ -480,12 +480,6 @@ class Edges(TrackedArray):
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
 
 
-def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
-    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
-    referenced = mesh.vertices.referenced
-    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
-
-
 def submesh(mesh: TriangleMesh, face_indices: ArrayLike, invert: bool = False) -> TriangleMesh:
     """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
     If `invert` is True, return a mesh with all faces *except* those in `face_indices`."""
@@ -520,6 +514,12 @@ def concatenate(meshes: Iterable[TriangleMesh]) -> TriangleMesh:
     return type(meshes[0])(vertices, faces)
 
 
+def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
+    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
+    referenced = mesh.vertices.referenced
+    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
+
+
 def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> TriangleMesh:
     """Merge duplicate vertices closer than rounding error 'epsilon'.
 
@@ -533,6 +533,38 @@ def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> Triangle
 
     unique, index, inverse = unique_rows(vertices, return_index=True, return_inverse=True)
     return type(mesh)(unique, inverse[faces])
+
+
+def remove_duplicate_faces(mesh: TriangleMesh) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def resolve_self_intersection(mesh: TriangleMesh) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def subdivide_midpoint(mesh: TriangleMesh) -> TriangleMesh:
+    """Subdivide by inserting a vertex at the midpoint of each edge
+    and connecting the new vertices to form four triangles from each
+    original triangle. This does not change the surface of the mesh."""
+    raise NotImplementedError
+
+
+def subdivide_loop(mesh: TriangleMesh) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def split_long_edges(mesh: TriangleMesh, threshold: float) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def collapse_short_edges(mesh: TriangleMesh, threshold: float) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def invert_faces(mesh: TriangleMesh) -> TriangleMesh:
+    """Reverse the winding order of all faces which flips the mesh "inside out"."""
+    return type(mesh)(mesh.vertices, mesh.faces[:, ::-1])
 
 
 def convex_hull(
@@ -598,3 +630,36 @@ def smooth_laplacian(
 #     """Smooth a mesh using the Taubin lambda-mu method."""
 #     incidence = mesh.vertex_vertex_incidence
 #     vertices = mesh.vertices.copy()
+
+
+def dilate(mesh: TriangleMesh, offset: float) -> TriangleMesh:
+    """Dilate by `offset` along vertex normals. May introduce self-intersections."""
+    return type(mesh)(mesh.vertices + offset * mesh.vertex_normals, mesh.faces)
+
+
+def erode(mesh: TriangleMesh, offset: float) -> TriangleMesh:
+    """Erode by `offset` along vertex normals. May introduce self-intersections."""
+    return dilate(mesh, -offset)
+
+
+def union(
+    a: TriangleMesh,
+    b: TriangleMesh,
+) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def intersection(
+    a: TriangleMesh,
+    b: TriangleMesh,
+    clip: bool = False
+) -> TriangleMesh:
+    raise NotImplementedError
+
+
+def difference(
+    a: TriangleMesh,
+    b: TriangleMesh,
+    clip: bool = False
+) -> TriangleMesh:
+    raise NotImplementedError
