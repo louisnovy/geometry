@@ -679,8 +679,13 @@ def sample_surface(
         face_weights = double_areas / double_areas.sum()
     else:
         face_weights = np.asarray(face_weights)
-        if len(face_weights) != len(mesh.faces):
-            raise ValueError("Face weights must be the same length as the number of faces.")
+        if not all([
+            face_weights.ndim == 1,
+            len(face_weights) == len(mesh.faces),
+            np.allclose(face_weights.sum(), 1),
+        ]):
+            raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
+
     rng = np.random.default_rng()
     # distribute count samples uniformly on the barycentric simplex
     barycentric = rng.dirichlet(np.ones(3), size=count)
@@ -688,9 +693,9 @@ def sample_surface(
     face_indices = rng.choice(len(mesh.faces), size=count, p=face_weights)
     # map onto faces with a linear combination of the face's corners
     samples = np.einsum("ij,ijk->ik", barycentric, mesh.faces.corners[face_indices])
+
     if sample_attributes is not None:
-        # TODO: when attributes are implemented, float vertex attributes should be interpolated?
+        # TODO: when attributes are implemented, float vertex attributes should be interpolated
         raise NotImplementedError
-    if return_index:
-        return samples, face_indices
-    return samples
+
+    return (samples, face_indices) if return_index else samples
