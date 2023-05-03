@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Iterable
+from typing import Iterable, Literal
 from numpy.typing import ArrayLike
 from functools import cached_property
 
@@ -621,15 +621,14 @@ def smooth_laplacian(
     return type(mesh)(vertices, mesh.faces)
 
 
-# def smooth_taubin(
-#     mesh: TriangleMesh,
-#     iterations: int = 1,
-#     lamb: float = 0.5,
-#     mu: float = -0.53,
-# ) -> TriangleMesh:
-#     """Smooth a mesh using the Taubin lambda-mu method."""
-#     incidence = mesh.vertex_vertex_incidence
-#     vertices = mesh.vertices.copy()
+def smooth_taubin(
+    mesh: TriangleMesh,
+    iterations: int = 1,
+    lamb: float = 0.5,
+    mu: float = -0.53,
+) -> TriangleMesh:
+    """Smooth a mesh using the Taubin lambda-mu method."""
+    raise NotImplementedError
 
 
 def dilate(mesh: TriangleMesh, offset: float) -> TriangleMesh:
@@ -663,3 +662,35 @@ def difference(
     clip: bool = False
 ) -> TriangleMesh:
     raise NotImplementedError
+
+
+def sample_surface(
+    mesh: TriangleMesh,
+    count: int,
+    face_weights: np.ndarray | None = None,
+    return_index: bool = False,
+    sample_attributes: Literal["vertex", "face", None] = None,
+) -> Points | tuple[Points, np.ndarray]:
+    """Sample points from the surface of a mesh."""
+    if mesh.is_empty:
+        raise ValueError("Cannot sample from an empty mesh.")
+    if face_weights is None:
+        double_areas = mesh.faces.double_areas
+        face_weights = double_areas / double_areas.sum()
+    else:
+        face_weights = np.asarray(face_weights)
+        if len(face_weights) != len(mesh.faces):
+            raise ValueError("Face weights must be the same length as the number of faces.")
+    rng = np.random.default_rng()
+    # distribute count samples uniformly on the barycentric simplex
+    barycentric = rng.dirichlet(np.ones(3), size=count)
+    # choose a random face for each sample to map to
+    face_indices = rng.choice(len(mesh.faces), size=count, p=face_weights)
+    # map onto faces with a linear combination of the face's corners
+    samples = np.einsum("ij,ijk->ik", barycentric, mesh.faces.corners[face_indices])
+    if sample_attributes is not None:
+        # TODO: when attributes are implemented, float vertex attributes should be interpolated?
+        raise NotImplementedError
+    if return_index:
+        return samples, face_indices
+    return samples
