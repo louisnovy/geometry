@@ -442,42 +442,36 @@ class Faces(TrackedArray):
     def obtuse(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is an obtuse triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
-        # obtuse if one edge is longer than the sum of the other two
         return (a2 > b2 + c2) | (b2 > a2 + c2) | (c2 > a2 + b2) & ~self.right
 
     @cached_property
     def acute(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is an acute triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
-        # acute if all edges are shorter than the sum of the other two
         return (a2 < b2 + c2) & (b2 < a2 + c2) & (c2 < a2 + b2) & ~self.right
 
     @cached_property
     def right(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is a right triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
-        # right if one edge is the hypotenuse of the other two
         return isclose(a2, b2 + c2) | isclose(b2, a2 + c2) | isclose(c2, a2 + b2)
 
     @cached_property
     def equilateral(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is equilateral."""
         a, b, c = self.edge_lengths.T
-        # equilateral if all edges are the same length
         return isclose(a, b) & isclose(b, c)
 
     @cached_property
     def isosceles(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is isosceles."""
         a, b, c = self.edge_lengths.T
-        # isosceles if two or more edges are the same length
         return isclose(a, b) | isclose(b, c) | isclose(c, a)
 
     @cached_property
     def scalene(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is scalene."""
         a, b, c = self.edge_lengths.T
-        # scalene if no edges are the same length
         return ~isclose(a, b) & ~isclose(b, c) & ~isclose(c, a)
 
 
