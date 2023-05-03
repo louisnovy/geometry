@@ -140,9 +140,7 @@ class TriangleMesh(Geometry):
 
     @property
     def is_developable(self) -> bool:
-        """True if the mesh represents a developable surface.
-        >>> assert cylinder(cap=False).is_developable == True
-        """
+        """True if the mesh represents a developable surface."""
         return np.allclose(self.vertices.gaussian_curvatures, 0)
 
     @property

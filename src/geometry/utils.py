@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Callable
 from xxhash import xxh3_64_intdigest
 import numpy as np
+from numpy.typing import ArrayLike
 
 
 class TrackedArray(np.ndarray):
@@ -94,27 +95,21 @@ class TrackedArray(np.ndarray):
     del _validate
 
 
-def unique_rows(a:np.ndarray, return_index=False, return_inverse=False, return_counts=False):
+def unique_rows(a: ArrayLike, **kwargs):
     """A significantly faster version of np.unique(array, axis=0, **kwargs). For 2D arrays.
     https://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array"""
-    a = np.asanyarray(a)
-    if not a.ndim == 2:
-        raise ValueError(f"array must be 2D, got {a.ndim}D")
-    b = a.view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
-    _, idx, inv = np.unique(b, return_index=True, return_inverse=True)
-    idx.sort()
-    ui = np.ones(len(a), bool)
-    ui[idx] = False
-    if return_index or return_inverse or return_counts:
-        result = [a[idx]]
-        if return_index:
-            result.append(idx)
-        if return_inverse:
-            result.append(inv)
-        if return_counts:
-            result.append(np.diff(np.append(np.where(ui)[0], len(a))))
-        return tuple(result)
-    return a[idx]
+
+    a = np.asarray(a)
+    a = a.reshape(a.shape[0], np.prod(a.shape[1:], dtype=int))
+
+    void_view = np.ascontiguousarray(a).view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
+    out = np.unique(void_view, **kwargs)
+
+    if isinstance(out, tuple):
+        return (out[0].view(a.dtype).reshape(out[0].shape[0], *a.shape[1:]), *out[1:])
+
+    return out.view(a.dtype).reshape(out.shape[0], *a.shape[1:])
+
 
 
 def unitize(array: np.ndarray, axis=-1, nan=0.0) -> np.ndarray:
