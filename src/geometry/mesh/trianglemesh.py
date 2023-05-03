@@ -11,7 +11,7 @@ from scipy.spatial import ConvexHull, Delaunay, QhullError
 from ..points import Points
 from ..base import Geometry
 from ..bounds import AABB
-from ..utils import Array, unique_rows, unitize
+from ..utils import TrackedArray, unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
 
 class TriangleMesh(Geometry):
@@ -39,14 +39,14 @@ class TriangleMesh(Geometry):
         return len(self.faces)
 
     @property
-    def halfedges(self):
+    def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
         # TODO: convention?
         # return self.faces.view(np.ndarray)[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 3, 2)
         return self.faces.view(np.ndarray)[:, [1, 2, 2, 0, 0, 1]].reshape(-1, 3, 2)
 
     @property
-    def edges(self):
+    def edges(self) -> Edges:
         """Unique edges of the mesh."""
         return Edges.from_halfedges(self.halfedges, mesh=self)
 
@@ -70,7 +70,7 @@ class TriangleMesh(Geometry):
         return (2 - self.euler_characteristic) // 2
 
     @property
-    def area(self):
+    def area(self) -> np.ndarray:
         """Total surface area."""
         return self.faces.areas.sum()
 
@@ -78,8 +78,8 @@ class TriangleMesh(Geometry):
     def volume(self) -> float:
         """Signed volume computed from the sum of the signed volumes of the tetrahedra formed by
         each face and the origin."""
-        v1, v2, v3 = np.rollaxis(self.faces.corners, 1)
-        return (v1 * np.cross(v2, v3)).sum() / 6
+        a, b, c = np.rollaxis(self.faces.corners, 1)
+        return (a * np.cross(b, c)).sum() / 6
 
     @property
     def centroid(self):
@@ -108,7 +108,7 @@ class TriangleMesh(Geometry):
         return self.vertices.valences.var() == 0
 
     @property
-    def is_closed(self):
+    def is_closed(self) -> bool:
         """True if all edges are shared by at least two faces.
         https://en.wikipedia.org/wiki/Closed_surface"""
         if self.n_faces == 0: return False
@@ -140,9 +140,7 @@ class TriangleMesh(Geometry):
 
     @property
     def is_developable(self) -> bool:
-        """True if the mesh represents a developable surface.
-        >>> assert cylinder(cap=False).is_developable == True
-        """
+        """True if the mesh represents a developable surface."""
         return np.allclose(self.vertices.gaussian_curvatures, 0)
 
     @property
@@ -177,7 +175,7 @@ class TriangleMesh(Geometry):
         """Sparse face-face incidence matrix."""
         raise NotImplementedError
 
-    def vertices_adjacent_vertex(self, index: int):
+    def vertices_adjacent_vertex(self, index: int) -> np.ndarray:
         """Find the indices of vertices adjacent to the vertex at the given index.
 
         >>> m = icosahedron()
@@ -187,7 +185,7 @@ class TriangleMesh(Geometry):
         incidence = self.vertex_vertex_incidence
         return incidence.indices[incidence.indptr[index] : incidence.indptr[index + 1]]
 
-    def faces_adjacent_vertex(self, idx: int):
+    def faces_adjacent_vertex(self, idx: int) -> np.ndarray:
         """Find the indices of faces adjacent to the vertex at the given index.
 
         >>> m = icosahedron()
@@ -200,8 +198,8 @@ class TriangleMesh(Geometry):
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
 
-    def __hash__(self):
-        return hash(self.vertices) ^ hash(self.faces)
+    def __hash__(self) -> int:
+        return hash((self.vertices, self.faces))
 
 
 class Vertices(Points):
@@ -258,7 +256,7 @@ class Vertices(Points):
         The valence of a vertex is the number of edges that meet at that vertex.
         >>> m = box()
         >>> m.vertices.valences
-        Array([5, 4, 5, 4, 5, 4, 5, 4])
+        np.ndarray([5, 4, 5, 4, 5, 4, 5, 4])
 
         The mean valence of an edge-manifold triangle mesh converges to 6 as faces increase.
         >>> m = icosahedron()
@@ -296,7 +294,7 @@ class Vertices(Points):
         >>> assert isclose(m.vertices.angle_defects.sum(), 4*np.pi)
         """
         faces = self._mesh.faces
-        summed_angles = np.bincount(faces.ravel(), weights=faces.internal_angles.ravel())
+        summed_angles = np.bincount(faces.ravel(), weights=faces.angles.ravel())
         defects = 2 * np.pi - summed_angles
         # boundary vertices have zero angle defect
         defects[self.boundaries] = 0
@@ -308,7 +306,7 @@ class Vertices(Points):
         return self.angle_defects / self.voronoi_areas
 
 
-class Faces(Array):
+class Faces(TrackedArray):
     def __new__(
         cls: Faces,
         faces: ArrayLike | None = None,
@@ -336,7 +334,7 @@ class Faces(Array):
         return self._mesh.vertices.view(np.ndarray)[self]
 
     @property
-    def internal_angles(self):
+    def angles(self):
         """(n, 3) array of corner angles for each face."""
         a, b, c = np.rollaxis(self.corners, 1)
         u, v, w = unitize(b - a), unitize(c - a), unitize(c - b)
@@ -355,13 +353,13 @@ class Faces(Array):
         return Points(self.corners.mean(axis=1))
 
     @property
-    def cross_products(self):
+    def cross_products(self) -> np.ndarray:
         """(n, 3) array of cross products for each face."""
         v0, v1, v2 = np.rollaxis(self.corners, 1)
         return np.cross(v1 - v0, v2 - v0)
 
     @property
-    def double_areas(self):
+    def double_areas(self) -> np.ndarray:
         """(n,) array of double areas for each face. (norms of cross products)"""
         crossed = self.cross_products
         if self._mesh.dim == 2:
@@ -369,12 +367,12 @@ class Faces(Array):
         return norm(crossed, axis=1)
 
     @property
-    def areas(self):
+    def areas(self) -> np.ndarray:
         """(n,) array of areas for each face."""
         return self.double_areas / 2
 
     @property
-    def voronoi_areas(self):
+    def voronoi_areas(self) -> np.ndarray:
         """(n, 3) array of voronoi areas for each vertex of each face. Degenerate faces have area of 0."""
         v0, v1, v2 = np.rollaxis(self.corners, 1)
         e0, e1, e2 = v2 - v1, v0 - v2, v1 - v0
@@ -406,7 +404,9 @@ class Faces(Array):
         return voronoi_areas
 
     @property
-    def degenerated(self):
+    def degenerated(self) -> np.ndarray:
+        """(n,) bool array of whether each face is degenerated (has zero area).
+        This can happen if two vertices are the same, or if all three vertices are colinear."""
         return self.double_areas == 0
 
     @property
@@ -426,7 +426,7 @@ class Faces(Array):
         return np.isin(self, edges[edges.boundaries]).any(axis=1)
 
 
-class Edges(Array):
+class Edges(TrackedArray):
     """(n, 2) array of unique edges. Each row is a pair of vertex indices."""
     def __new__(
         cls: Edges,
@@ -564,7 +564,7 @@ def convex_hull(
 
     # find the actual vertices and map them to the original points
     idx = np.sort(hull.vertices)
-    faces = np.zeros(len(hull.points), dtype=np.float64)
+    faces = np.zeros(len(hull.points), dtype=int)
     faces[idx] = np.arange(len(idx))
     m = mesh_type(hull.points[idx], faces[hull.simplices])
 

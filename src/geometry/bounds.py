@@ -2,7 +2,7 @@ from __future__ import annotations
 from numpy.typing import ArrayLike
 
 import numpy as np
-from .utils import Array
+from .utils import TrackedArray
 from .base import Geometry
 
 class AABB(Geometry):
@@ -12,8 +12,8 @@ class AABB(Geometry):
         if len(args) == 1:
             min, max = args[0]
         min, max = args
-        self.min = Array(min)
-        self.max = Array(max)
+        self.min = TrackedArray(min)
+        self.max = TrackedArray(max)
         if not self.min.shape == self.max.shape:
             raise ValueError("min and max must have the same shape")
 
