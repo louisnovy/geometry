@@ -9,9 +9,10 @@ class AABB(Geometry):
     """Axis-aligned bounding box in n-dimensions."""
 
     def __init__(self, *args):
-        if len(args) == 1:
+        try:
+            min, max = args
+        except ValueError:
             min, max = args[0]
-        min, max = args
         self.min = TrackedArray(min)
         self.max = TrackedArray(max)
         if not self.min.shape == self.max.shape:
