@@ -29,5 +29,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies and package
         run: pip install '.[testing]'
+      - name: Where are we?
+        run: pwd && ls -la
       - name: Run pytest
-        run: python -m pytest test
+        run: python -m pytest ./test
