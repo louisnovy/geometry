@@ -85,14 +85,13 @@ class TriangleMesh(Geometry):
 
     @property
     def centroid(self):
-        """Centroid computed from the sum of the centroids of each face weighted by area."""
+        """Centroid computed from the mean of face centroids weighted by area."""
         return self.faces.centroids.T @ self.faces.areas / self.area
 
     @property
     def aabb(self) -> AABB:
         """Axis-aligned bounding box."""
-        vertices = self.vertices
-        return vertices.aabb
+        return self.vertices.aabb
 
     @property
     def is_empty(self) -> bool:
@@ -597,7 +596,32 @@ def subdivide_midpoint(mesh: TriangleMesh) -> TriangleMesh:
     """Subdivide by inserting a vertex at the midpoint of each edge
     and connecting the new vertices to form four triangles from each
     original triangle. This does not change the surface of the mesh."""
+    # vertices = np.concatenate([mesh.vertices, mesh.edges.midpoints])
+    # faces = np.concatenate(
+    #     [
+    #         mesh.faces,
+    #         np.stack(
+    #             [
+    #                 mesh.edges[:, 0],
+    #                 mesh.edges[:, 1],
+    #                 np.arange(mesh.n_edges, mesh.n_edges * 2),
+    #             ],
+    #             axis=1,
+    #         ),
+    #         np.stack(
+    #             [
+    #                 mesh.edges[:, 1],
+    #                 mesh.edges[:, 0],
+    #                 np.arange(mesh.n_edges * 2, mesh.n_edges * 3),
+    #             ],
+    #             axis=1,
+    #         ),
+    #     ]
+    # )
+    # return type(mesh)(vertices, faces)
+
     raise NotImplementedError
+
 
 
 def subdivide_loop(mesh: TriangleMesh) -> TriangleMesh:
@@ -654,6 +678,9 @@ def convex_hull(
     flipped = np.einsum("ij,ij->i", m.faces.centroids - m.centroid, m.faces.normals) < 0
     fixed = np.where(flipped[:, None], m.faces[:, ::-1], m.faces)
 
+    # TODO: propagate vertex attributes
+    # TODO: face attributes?
+
     return mesh_type(m.vertices, fixed)
 
 
@@ -691,11 +718,13 @@ def erode(mesh: TriangleMesh, offset: float) -> TriangleMesh:
     return dilate(mesh, -offset)
 
 
+from .boolean import boolean, check_intersection as _check_intersection
+
 def union(
     a: TriangleMesh,
     b: TriangleMesh,
 ) -> TriangleMesh:
-    raise NotImplementedError
+    return boolean(a, b, "union")
 
 
 def intersection(
@@ -703,7 +732,7 @@ def intersection(
     b: TriangleMesh,
     clip: bool = False
 ) -> TriangleMesh:
-    raise NotImplementedError
+    return boolean(a, b, "intersection")
 
 
 def difference(
@@ -711,17 +740,26 @@ def difference(
     b: TriangleMesh,
     clip: bool = False
 ) -> TriangleMesh:
-    raise NotImplementedError
+    return boolean(a, b, "difference")
+
+
+def check_intersection(
+    a: TriangleMesh,
+    b: TriangleMesh,
+) -> bool:
+    return _check_intersection(a, b)
 
 
 def sample_surface(
     mesh: TriangleMesh,
     count: int,
     face_weights: np.ndarray | None = None,
+    barycentric_weights = (1, 1, 1),
     return_index: bool = False,
     sample_attributes: Literal["vertex", "face", None] = None,
 ) -> Points | tuple[Points, np.ndarray]:
     """Sample points from the surface of a mesh."""
+
     if mesh.is_empty:
         raise ValueError("Cannot sample from an empty mesh.")
     if face_weights is None:
@@ -737,11 +775,11 @@ def sample_surface(
             raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
 
     rng = np.random.default_rng()
-    # distribute count samples uniformly on the barycentric simplex
-    barycentric = rng.dirichlet(np.ones(3), size=count)
+    # distribute count samples uniformly on the simplex
+    barycentric = rng.dirichlet(barycentric_weights, size=count)
     # choose a random face for each sample to map to
     face_indices = rng.choice(len(mesh.faces), size=count, p=face_weights)
-    # map onto faces with a linear combination of the face's corners
+    # map samples on the simplex to each face
     samples = np.einsum("ij,ijk->ik", barycentric, mesh.faces.corners[face_indices])
 
     if sample_attributes is not None:
