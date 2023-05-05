@@ -87,7 +87,7 @@ def main():
         author_email="novylouis@gmail.com",
         install_requires=["numpy", "scipy", "xxhash"],
         extras_require={"testing": ["pytest"], "dev": ["pytest", "pre-commit"]},
-        packages=find_packages("src"),
+        packages=["geometry"],
         package_dir={"": "src"},
         test_suite="test",
         python_requires=">=3.8",
