@@ -751,7 +751,7 @@ def erode(mesh: TriangleMesh, offset: float) -> TriangleMesh:
     return dilate(mesh, -offset)
 
 
-from .boolean import boolean, check_intersection as _check_intersection
+# from .boolean import boolean, check_intersection as _check_intersection
 
 def union(
     a: TriangleMesh,
