@@ -1,9 +1,4 @@
-from geometry_bindings import (
-    mesh_boolean_union,
-    mesh_boolean_difference,
-    mesh_boolean_intersection,
-    mesh_check_intersection, 
-)
+import geometry_bindings as gb
 
 from . import trianglemesh
 
@@ -15,15 +10,7 @@ def boolean(
 ) -> trianglemesh.TriangleMesh:
     av, af = a.vertices, a.faces
     bv, bf = b.vertices, b.faces
-    if operation == "union":
-        v, f, source = mesh_boolean_union(av, af, bv, bf)
-    elif operation == "difference":
-        v, f, source = mesh_boolean_difference(av, af, bv, bf)
-    elif operation == "intersection":
-        v, f, source = mesh_boolean_intersection(av, af, bv, bf)
-    else:
-        raise ValueError(f"Unknown operation: {operation}")
-    print(f"Source: {source}")
+    v, f, source = gb.mesh_boolean(av, af, bv, bf, operation)
     return trianglemesh.TriangleMesh(v, f)
 
 def check_intersection(
@@ -32,4 +19,11 @@ def check_intersection(
 ) -> bool:
     av, af = a.vertices, a.faces
     bv, bf = b.vertices, b.faces
-    return mesh_check_intersection(av, af, bv, bf)
+    return gb.mesh_check_intersection(av, af, bv, bf)
+
+def remesh_self_intersections(mesh: trianglemesh.TriangleMesh):
+    out = gb.remesh_self_intersections(mesh.vertices, mesh.faces)
+    vertices, faces, intersecting_pairs, source_face_indices, unique_vertex_indices = out
+    return out
+
+# def clipped_intersection

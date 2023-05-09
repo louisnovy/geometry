@@ -6,15 +6,17 @@ from functools import cached_property
 import numpy as np
 from numpy import isclose
 from numpy.linalg import norm
-from scipy.sparse import csr_array, coo_array, csgraph
+from scipy.sparse import csr_array, csgraph
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 from ..points import Points
 from ..base import Geometry
 from ..bounds import AABB
-from ..utils import TrackedArray, unique_rows, unitize
+from ..utils import unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
+from ..array import TrackedArray
 
+property = cached_property # TODO: custom property decorator for caching cleanly
 
 class TriangleMesh(Geometry):
     def __init__(
@@ -104,11 +106,6 @@ class TriangleMesh(Geometry):
         return bool(np.isfinite(self.vertices).all() and np.isfinite(self.faces).all())
 
     @property
-    def is_regular(self) -> bool:
-        """True if all vertex valences are equal."""
-        return self.vertices.valences.var() == 0
-
-    @property
     def is_closed(self) -> bool:
         """True if all edges are shared by at least two faces.
         https://en.wikipedia.org/wiki/Closed_surface"""
@@ -152,49 +149,6 @@ class TriangleMesh(Geometry):
     def is_watertight(self) -> bool:
         raise NotImplementedError
 
-    @property
-    def vertex_vertex_incidence(self) -> csr_array:
-        """Sparse vertex-vertex incidence matrix."""
-        edges = self.halfedges.reshape(-1, 2)
-        shape = (self.n_vertices, self.n_vertices)
-        data = np.ones(len(edges), dtype=bool)
-        return coo_array((data, edges.T), shape=shape).tocsr()
-
-    @property
-    def vertex_face_incidence(self) -> csr_array:
-        """Sparse vertex-face incidence matrix."""
-        faces = self.faces
-        row = faces.ravel()
-        # repeat for each vertex in face
-        col = np.repeat(np.arange(len(faces)), faces.shape[1])
-        data = np.ones(len(row), dtype=bool)
-        shape = (len(self.vertices), len(faces))
-        return coo_array((data, (row, col)), shape=shape).tocsr()
-    
-    @property
-    def face_face_incidence(self) -> csr_array:
-        """Sparse face-face incidence matrix."""
-        raise NotImplementedError
-
-    def vertices_adjacent_vertex(self, index: int) -> np.ndarray:
-        """Find the indices of vertices adjacent to the vertex at the given index.
-
-        >>> m = icosahedron()
-        >>> m.vertices_adjacent_vertex(0)
-        array([ 1,  5,  7, 10, 11], dtype=int32)
-        """
-        incidence = self.vertex_vertex_incidence
-        return incidence.indices[incidence.indptr[index] : incidence.indptr[index + 1]]
-
-    def faces_adjacent_vertex(self, idx: int) -> np.ndarray:
-        """Find the indices of faces adjacent to the vertex at the given index.
-
-        >>> m = icosahedron()
-        >>> m.faces_adjacent_vertex(0)
-        array([0, 1, 2, 3, 4], dtype=int32)
-        """
-        incidence = self.vertex_face_incidence
-        return incidence.indices[incidence.indptr[idx] : incidence.indptr[idx + 1]]
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
@@ -224,13 +178,63 @@ class Vertices(Points):
         self._mesh = getattr(obj, '_mesh', None)
 
     @property
+    def adjacency_matrix(self) -> csr_array:
+        """Compressed sparse row vertex-vertex adjacency matrix."""
+        edges = self._mesh.halfedges.reshape(-1, 2)
+        n_vertices = len(self)
+        data = np.ones(len(edges), dtype=np.int32)
+        return csr_array((data, edges.T), shape=(n_vertices, n_vertices))
+
+    @property
+    def adjacency_list(self) -> list[list[int]]:
+        """Adjacency list."""
+        adjacency = self.adjacency_matrix
+        return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
+    
+    @property
+    def incidence_matrix(self) -> csr_array:
+        """Compressed sparse row vertex-face incidence matrix."""
+        faces = self._mesh.faces
+        row = faces.ravel()
+        # repeat for each vertex in face
+        col = np.repeat(np.arange(len(faces)), faces.shape[1])
+        data = np.ones(len(row), dtype=bool)
+        shape = (len(self), len(faces))
+        return csr_array((data, (row, col)), shape=shape)
+    
+    @property
+    def incidence_list(self) -> list[list[int]]:
+        """Face incidence list."""
+        incidence = self.incidence_matrix
+        return [incidence.indices[incidence.indptr[i] : incidence.indptr[i + 1]] for i in range(len(self))]
+
+    def get_vertex_neighbors(self, index: int) -> np.ndarray:
+        """Find the indices of vertices adjacent to the vertex at the given index.
+
+        >>> m = icosahedron()
+        >>> m.vertices.get_vertex_neighbors(0)
+        array([ 1,  5,  7, 10, 11], dtype=int32)
+        """
+        adjacency = self.adjacency_matrix
+        return adjacency.indices[adjacency.indptr[index] : adjacency.indptr[index + 1]]
+    
+    def get_face_neighbors(self, index: int) -> np.ndarray:
+        """Find the indices of faces incident the vertex at the given index.
+
+        >>> m = icosahedron()
+        >>> m.vertices.get_face_neighbors(0)
+        array([0, 1, 2, 3, 4], dtype=int32)
+        """
+        incidence = self.incidence_matrix
+        return incidence.indices[incidence.indptr[index] : incidence.indptr[index + 1]]
+
+    @property
     def normals(self):
         """(n, 3) float array of unit normal vectors for each vertex.
         Vertex normals are the mean of adjacent face normals weighted by area."""
         faces = self._mesh.faces
-        incidence = self._mesh.vertex_face_incidence
         # since we are about to unitize next we can simply multiply by area
-        vertex_normals = incidence @ (faces.normals * faces.areas[:, None])
+        vertex_normals = self.incidence_matrix @ (faces.normals * faces.double_areas[:, None])
         return unitize(vertex_normals)
 
     @property
@@ -242,7 +246,7 @@ class Vertices(Points):
         >>> m = ico_sphere()
         >>> assert m.vertices.areas.sum() == m.faces.areas.sum() == m.area
         """
-        return self._mesh.vertex_face_incidence @ self._mesh.faces.areas / 3
+        return self.incidence_matrix @ self._mesh.faces.areas / 3
 
     @property
     def voronoi_areas(self):
@@ -270,8 +274,7 @@ class Vertices(Points):
         5.981308411214953
         5.995316159250586
         """
-        # return self._mesh.vertex_face_incidence.sum(axis=1)
-        return np.bincount(self._mesh.faces.ravel(), minlength=len(self))
+        return self.adjacency_matrix.sum(axis=0)
 
     @property
     def referenced(self):
@@ -305,7 +308,7 @@ class Vertices(Points):
     def gaussian_curvatures(self):
         """(n,) array of gaussian curvatures at each vertex."""
         return self.angle_defects / self.voronoi_areas
-
+    
 
 class Faces(TrackedArray):
     def __new__(
@@ -347,10 +350,21 @@ class Faces(TrackedArray):
         # complement angle so we can take a shortcut
         res[:, 2] = np.pi - res[:, 0] - res[:, 1]
         return res
+    
+    @property
+    def cotangents(self):
+        """(n, 3) array of cotangents of corner angles for each face."""
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.reciprocal(np.tan(self.internal_angles))
 
     @property
     def centroids(self) -> Points:
-        """`(n, dim) `Points` of face centroids."""
+        """`(n, dim) `Points` of face centroids. Equivalent to `barycenters`."""
+        return Points(self.corners.mean(axis=1))
+    
+    @property
+    def barycenters(self) -> Points:
+        """`(n, dim) `Points` of face barycenters. Equivalent to `centroids`."""
         return Points(self.corners.mean(axis=1))
 
     @property
@@ -432,49 +446,66 @@ class Faces(TrackedArray):
         v0, v1, v2 = np.rollaxis(self.corners, 1)
         return np.array([norm(v1 - v0, axis=1), norm(v2 - v1, axis=1), norm(v0 - v2, axis=1)]).T
 
-    @cached_property
+    @property
     def edge_lengths_squared(self) -> np.ndarray:
         """(n, 3) array of squared edge lengths for each face."""
         a, b, c = self.edge_lengths.T
         return np.array([a**2, b**2, c**2]).T
 
-    @cached_property
+    @property
     def obtuse(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is an obtuse triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
         return (a2 > b2 + c2) | (b2 > a2 + c2) | (c2 > a2 + b2) & ~self.right
 
-    @cached_property
+    @property
     def acute(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is an acute triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
         return (a2 < b2 + c2) & (b2 < a2 + c2) & (c2 < a2 + b2) & ~self.right
 
-    @cached_property
+    @property
     def right(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is a right triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
         return isclose(a2, b2 + c2) | isclose(b2, a2 + c2) | isclose(c2, a2 + b2)
 
-    @cached_property
+    @property
     def equilateral(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is equilateral."""
         a, b, c = self.edge_lengths.T
         return isclose(a, b) & isclose(b, c)
 
-    @cached_property
+    @property
     def isosceles(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is isosceles."""
         a, b, c = self.edge_lengths.T
         return isclose(a, b) | isclose(b, c) | isclose(c, a)
 
-    @cached_property
+    @property
     def scalene(self) -> np.ndarray[bool]:
         """(n,) array of booleans indicating whether each face is scalene."""
         a, b, c = self.edge_lengths.T
         return ~isclose(a, b) & ~isclose(b, c) & ~isclose(c, a)
-
-
+    
+    @property
+    def circumradii(self) -> np.ndarray[float]:
+        """(n,) array of circumradii for each face."""
+        a, b, c = self.edge_lengths.T
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r = a * b * c / (4 * self.areas)
+        r[np.isnan(r)] = 0
+        return r
+    
+    @property
+    def inradii(self) -> np.ndarray[float]:
+        """(n,) array of inradii for each face."""
+        a, b, c = self.edge_lengths.T
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r = self.areas / (0.5 * (a + b + c))
+        r[np.isnan(r)] = 0
+        return r
+    
 class Edges(TrackedArray):
     """(n, 2) array of unique edges. Each row is a pair of vertex indices."""
     def __new__(
@@ -542,9 +573,9 @@ def submesh(mesh: TriangleMesh, face_indices: ArrayLike, invert: bool = False) -
 def separate(mesh: TriangleMesh, method="vertex") -> list:
     """Return a list of meshes, each representing a connected component of the mesh."""
     if method == "vertex":
-        incidence = mesh.vertex_vertex_incidence
+        incidence = mesh.vertices.adjacency_matrix
     elif method == "face":
-        incidence = mesh.face_face_incidence
+        incidence = mesh.faces.incidence
     
     n_components, labels = csgraph.connected_components(incidence, directed=False)
 
@@ -652,7 +683,7 @@ def convex_hull(
         points = obj.vertices
         mesh_type = type(obj)  # if mesh is a subclass, return that type
     else:
-        points = np.asanyarray(points)
+        points = np.asanyarray(obj)
 
     try:
         hull = ConvexHull(points, qhull_options=qhull_options)
@@ -689,14 +720,16 @@ def smooth_laplacian(
     mesh: TriangleMesh, 
     iterations: int = 1,
 ) -> TriangleMesh:
-    incidence = mesh.vertex_vertex_incidence
-    vertices = mesh.vertices.copy()
+    vertices = mesh.vertices
+    valences = vertices.valences.reshape(-1, 1)
+    incidence = vertices.incidence_matrix
+
+    new_vertices = vertices.copy()
 
     for _ in range(iterations):
-        vertices = (incidence @ vertices) / incidence.sum(axis=1)[:, None]
+        new_vertices = (incidence @ new_vertices) / valences
 
-    return type(mesh)(vertices, mesh.faces)
-
+    return type(mesh)(new_vertices, mesh.faces)
 
 def smooth_taubin(
     mesh: TriangleMesh,
@@ -752,11 +785,12 @@ def check_intersection(
 
 def sample_surface(
     mesh: TriangleMesh,
-    count: int,
+    n_samples: int,
     face_weights: np.ndarray | None = None,
     barycentric_weights = (1, 1, 1),
     return_index: bool = False,
     sample_attributes: Literal["vertex", "face", None] = None,
+    seed: int | None = None,
 ) -> Points | tuple[Points, np.ndarray]:
     """Sample points from the surface of a mesh."""
 
@@ -773,17 +807,19 @@ def sample_surface(
             np.allclose(face_weights.sum(), 1),
         ]):
             raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
-
-    rng = np.random.default_rng()
-    # distribute count samples uniformly on the simplex
-    barycentric = rng.dirichlet(barycentric_weights, size=count)
+    rng = np.random.default_rng(seed)
+    # distribute samples on the simplex
+    print("bary")
+    barycentric = rng.dirichlet(barycentric_weights, size=n_samples)
     # choose a random face for each sample to map to
-    face_indices = rng.choice(len(mesh.faces), size=count, p=face_weights)
-    # map samples on the simplex to each face
+    print("search")
+    face_indices = np.searchsorted(np.cumsum(face_weights), rng.random(n_samples))
+    # map samples on the simplex to each face with a linear combination of the face's corners
+    print("einsum")
     samples = np.einsum("ij,ijk->ik", barycentric, mesh.faces.corners[face_indices])
 
     if sample_attributes is not None:
         # TODO: when attributes are implemented, float vertex attributes should be interpolated
         raise NotImplementedError
-
+        
     return (samples, face_indices) if return_index else samples

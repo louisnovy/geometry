@@ -2,7 +2,7 @@ from __future__ import annotations
 from numpy.typing import ArrayLike
 
 import numpy as np
-from .utils import TrackedArray
+from .array import TrackedArray
 from .base import Geometry
 
 class AABB(Geometry):
@@ -40,7 +40,9 @@ class AABB(Geometry):
         return np.linalg.norm(self.extents)
 
     def __getitem__(self, i):
-        return (self.min, self.max)[i]  # allows: min, max = AABB and passing to AABB constructor
+        return np.array([self.min, self.max])[i]  # allows: min, max = AABB and passing to AABB constructor
+
+    # def __array__
 
     def __hash__(self):
         return hash((self.min, self.max))

@@ -1,10 +1,11 @@
 #include <igl/copyleft/cgal/RemeshSelfIntersectionsParam.h>
 #include <igl/copyleft/cgal/fast_winding_number.h>
+#include <igl/winding_number.h>
 #include <igl/copyleft/cgal/intersect_other.h>
 #include <igl/copyleft/cgal/mesh_boolean.h>
-// #include <igl/copyleft/cgal/minkowski_sum.h>
 #include <igl/copyleft/cgal/outer_hull.h>
 #include <igl/copyleft/cgal/remesh_self_intersections.h>
+#include <igl/copyleft/cgal/convex_hull.h>
 #include <igl/point_mesh_squared_distance.h>
 #include <pybind11/eigen.h>
 #include <pybind11/functional.h>
@@ -16,61 +17,54 @@ using namespace Eigen;
 namespace py = pybind11;
 using EigenDStride = Stride<Eigen::Dynamic, Eigen::Dynamic>;
 template <typename MatrixType>
+
+// allows passing in a numpy array with arbitrary stride
 using EigenDRef =
     Ref<MatrixType, 0,
-        EigenDStride>; // allows passing column/row order matrices easily
+        EigenDStride>;
+
+// TODO: modularize these and split into headers
+
+// convert string to a valid igl::MeshBooleanType enum
+igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
+  static const std::map<std::string, igl::MeshBooleanType> type_map = {
+      {"resolve", igl::MESH_BOOLEAN_TYPE_RESOLVE},
+      {"union", igl::MESH_BOOLEAN_TYPE_UNION},
+      {"intersection", igl::MESH_BOOLEAN_TYPE_INTERSECT},
+      {"intersect", igl::MESH_BOOLEAN_TYPE_INTERSECT},
+      {"difference", igl::MESH_BOOLEAN_TYPE_MINUS},
+      {"minus", igl::MESH_BOOLEAN_TYPE_MINUS},
+      {"symmetric_difference", igl::MESH_BOOLEAN_TYPE_XOR},
+      {"xor", igl::MESH_BOOLEAN_TYPE_XOR}};
+  auto it = type_map.find(type);
+  if (it == type_map.end()) {
+    throw std::invalid_argument("Invalid mesh boolean type");
+  }
+  return it->second;
+}
+
+bool is_single_point(Eigen::MatrixXd &points) {
+  return points.rows() == 1;
+}
+
 
 void igl_bindings(py::module &m) {
-  m.def("mesh_boolean_union",
-        [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
-           EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
-          Eigen::MatrixXd verticesA(verticesA_in);
-          Eigen::MatrixXi facesA(facesA_in);
-          Eigen::MatrixXd verticesB(verticesB_in);
-          Eigen::MatrixXi facesB(facesB_in);
-          Eigen::MatrixXd vertices_out;
-          Eigen::MatrixXi faces_out;
-          Eigen::MatrixXi source_face_index;
-          igl::copyleft::cgal::mesh_boolean(
-              verticesA, facesA, verticesB, facesB,
-              igl::MESH_BOOLEAN_TYPE_UNION, vertices_out, faces_out,
-              source_face_index);
-          return std::make_tuple(vertices_out, faces_out, source_face_index);
-        });
-
-  m.def("mesh_boolean_intersection",
-        [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
-           EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
-          Eigen::MatrixXd verticesA(verticesA_in);
-          Eigen::MatrixXi facesA(facesA_in);
-          Eigen::MatrixXd verticesB(verticesB_in);
-          Eigen::MatrixXi facesB(facesB_in);
-          Eigen::MatrixXd vertices_out;
-          Eigen::MatrixXi faces_out;
-          Eigen::MatrixXi source_face_index;
-          igl::copyleft::cgal::mesh_boolean(
-              verticesA, facesA, verticesB, facesB,
-              igl::MESH_BOOLEAN_TYPE_INTERSECT, vertices_out, faces_out,
-              source_face_index);
-          return std::make_tuple(vertices_out, faces_out, source_face_index);
-        });
-
-  m.def("mesh_boolean_difference",
-        [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
-           EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
-          Eigen::MatrixXd verticesA(verticesA_in);
-          Eigen::MatrixXi facesA(facesA_in);
-          Eigen::MatrixXd verticesB(verticesB_in);
-          Eigen::MatrixXi facesB(facesB_in);
-          Eigen::MatrixXd vertices_out;
-          Eigen::MatrixXi faces_out;
-          Eigen::MatrixXi source_face_index;
-          igl::copyleft::cgal::mesh_boolean(
-              verticesA, facesA, verticesB, facesB,
-              igl::MESH_BOOLEAN_TYPE_MINUS, vertices_out, faces_out,
-              source_face_index);
-          return std::make_tuple(vertices_out, faces_out, source_face_index);
-        });
+  m.def("mesh_boolean", [](EigenDRef<MatrixXd> verticesA_in,
+                           EigenDRef<MatrixXi> facesA_in,
+                           EigenDRef<MatrixXd> verticesB_in,
+                           EigenDRef<MatrixXi> facesB_in, std::string type) {
+    Eigen::MatrixXd verticesA(verticesA_in);
+    Eigen::MatrixXi facesA(facesA_in);
+    Eigen::MatrixXd verticesB(verticesB_in);
+    Eigen::MatrixXi facesB(facesB_in);
+    Eigen::MatrixXd vertices_out;
+    Eigen::MatrixXi faces_out;
+    Eigen::MatrixXi source_face_index;
+    igl::copyleft::cgal::mesh_boolean(verticesA, facesA, verticesB, facesB,
+                                      get_mesh_boolean_type(type), vertices_out,
+                                      faces_out, source_face_index);
+    return std::make_tuple(vertices_out, faces_out, source_face_index);
+  });
 
   m.def("point_mesh_squared_distance", [](EigenDRef<MatrixXd> points_in,
                                           EigenDRef<MatrixXd> vertices_in,
@@ -147,4 +141,18 @@ void igl_bindings(py::module &m) {
     return std::make_tuple(vertices_out, faces_out, intersecting_face_pairs,
                            source_face_indices, unique_vertex_indices);
   });
-}
+
+  m.def("generalized_winding_number", [](EigenDRef<MatrixXd> vertices_in,
+                                         EigenDRef<MatrixXi> faces_in,
+                                        EigenDRef<MatrixXd> query_points_in) {
+    Eigen::MatrixXd vertices(vertices_in);
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::MatrixXd query_points(query_points_in);
+    Eigen::VectorXd winding_numbers;
+    igl::winding_number(vertices, faces, query_points, winding_numbers);
+    return winding_numbers;
+  });
+
+  m.def("convex_hull", [](EigenDRef<MatrixXd> points_in) {
+    Eigen::MatrixXd points(points_in);
+
