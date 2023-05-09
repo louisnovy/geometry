@@ -155,4 +155,8 @@ void igl_bindings(py::module &m) {
 
   m.def("convex_hull", [](EigenDRef<MatrixXd> points_in) {
     Eigen::MatrixXd points(points_in);
-
+    Eigen::MatrixXi out_faces;
+    igl::copyleft::cgal::convex_hull(points, out_faces);
+    return out_faces;
+  });
+}
