@@ -13,10 +13,10 @@ include(libigl)
 
 add_subdirectory(./ext/pybind11)
 pybind11_add_module(
-    geometry_bindings
+    _geometry
     ./src/bindings/igl.cpp
     ./src/bindings/core.cpp
 )
 
-target_link_libraries(geometry_bindings PUBLIC igl::core igl_copyleft::cgal)
-target_include_directories(geometry_bindings PUBLIC ./src/cpp/)
+target_link_libraries(_geometry PUBLIC igl::core igl_copyleft::cgal)
+target_include_directories(_geometry PUBLIC ./src/cpp/)

@@ -1,12 +1,14 @@
 #include <igl/copyleft/cgal/RemeshSelfIntersectionsParam.h>
+#include <igl/copyleft/cgal/convex_hull.h>
 #include <igl/copyleft/cgal/fast_winding_number.h>
-#include <igl/winding_number.h>
 #include <igl/copyleft/cgal/intersect_other.h>
 #include <igl/copyleft/cgal/mesh_boolean.h>
 #include <igl/copyleft/cgal/outer_hull.h>
 #include <igl/copyleft/cgal/remesh_self_intersections.h>
-#include <igl/copyleft/cgal/convex_hull.h>
+#include <igl/facet_adjacency_matrix.h>
 #include <igl/point_mesh_squared_distance.h>
+#include <igl/unique_edge_map.h>
+#include <igl/winding_number.h>
 #include <pybind11/eigen.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -18,10 +20,8 @@ namespace py = pybind11;
 using EigenDStride = Stride<Eigen::Dynamic, Eigen::Dynamic>;
 template <typename MatrixType>
 
-// allows passing in a numpy array with arbitrary stride
-using EigenDRef =
-    Ref<MatrixType, 0,
-        EigenDStride>;
+// allows referencing numpy arrays of arbitrary shape without copying
+using EigenDRef = Ref<MatrixType, 0, EigenDStride>;
 
 // TODO: modularize these and split into headers
 
@@ -43,10 +43,7 @@ igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
   return it->second;
 }
 
-bool is_single_point(Eigen::MatrixXd &points) {
-  return points.rows() == 1;
-}
-
+bool is_single_point(Eigen::MatrixXd &points) { return points.rows() == 1; }
 
 void igl_bindings(py::module &m) {
   m.def("mesh_boolean", [](EigenDRef<MatrixXd> verticesA_in,
@@ -142,21 +139,41 @@ void igl_bindings(py::module &m) {
                            source_face_indices, unique_vertex_indices);
   });
 
-  m.def("generalized_winding_number", [](EigenDRef<MatrixXd> vertices_in,
-                                         EigenDRef<MatrixXi> faces_in,
-                                        EigenDRef<MatrixXd> query_points_in) {
-    Eigen::MatrixXd vertices(vertices_in);
-    Eigen::MatrixXi faces(faces_in);
-    Eigen::MatrixXd query_points(query_points_in);
-    Eigen::VectorXd winding_numbers;
-    igl::winding_number(vertices, faces, query_points, winding_numbers);
-    return winding_numbers;
-  });
+  m.def("generalized_winding_number",
+        [](EigenDRef<MatrixXd> vertices_in, EigenDRef<MatrixXi> faces_in,
+           EigenDRef<MatrixXd> query_points_in) {
+          Eigen::MatrixXd vertices(vertices_in);
+          Eigen::MatrixXi faces(faces_in);
+          Eigen::MatrixXd query_points(query_points_in);
+          Eigen::VectorXd winding_numbers;
+          igl::winding_number(vertices, faces, query_points, winding_numbers);
+          return winding_numbers;
+        });
 
   m.def("convex_hull", [](EigenDRef<MatrixXd> points_in) {
     Eigen::MatrixXd points(points_in);
     Eigen::MatrixXi out_faces;
     igl::copyleft::cgal::convex_hull(points, out_faces);
     return out_faces;
+  });
+
+  m.def("facet_adjacency_matrix", [](EigenDRef<MatrixXi> faces_in) {
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::SparseMatrix<int> A;
+    igl::facet_adjacency_matrix(faces, A);
+    return A;
+  });
+
+  m.def("unique_edge_map", [](EigenDRef<MatrixXi> faces_in) {
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::MatrixXi directed_edges;
+    Eigen::VectorXi unique_undirected_edges;
+    Eigen::VectorXi edge_map;
+    std::vector<std::vector<typename Eigen::MatrixXi::Index>>
+        unique_edge_to_edge_map;
+    igl::unique_edge_map(faces, directed_edges, unique_undirected_edges,
+                         edge_map, unique_edge_to_edge_map);
+    return std::make_tuple(directed_edges, unique_undirected_edges, edge_map,
+                           unique_edge_to_edge_map);
   });
 }

@@ -8,6 +8,6 @@ namespace py = pybind11;
 
 void igl_bindings(py::module& m);
 
-PYBIND11_MODULE(geometry_bindings, m) {
+PYBIND11_MODULE(_geometry, m) {
     igl_bindings(m);
 }

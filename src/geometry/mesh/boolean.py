@@ -1,4 +1,4 @@
-import geometry_bindings as gb
+from _geometry import remesh_self_intersections, mesh_boolean, mesh_check_intersection
 
 from . import trianglemesh
 
@@ -10,7 +10,7 @@ def boolean(
 ) -> trianglemesh.TriangleMesh:
     av, af = a.vertices, a.faces
     bv, bf = b.vertices, b.faces
-    v, f, source = gb.mesh_boolean(av, af, bv, bf, operation)
+    v, f, source = mesh_boolean(av, af, bv, bf, operation)
     return trianglemesh.TriangleMesh(v, f)
 
 def check_intersection(
@@ -19,10 +19,10 @@ def check_intersection(
 ) -> bool:
     av, af = a.vertices, a.faces
     bv, bf = b.vertices, b.faces
-    return gb.mesh_check_intersection(av, af, bv, bf)
+    return mesh_check_intersection(av, af, bv, bf)
 
 def remesh_self_intersections(mesh: trianglemesh.TriangleMesh):
-    out = gb.remesh_self_intersections(mesh.vertices, mesh.faces)
+    out = remesh_self_intersections(mesh.vertices, mesh.faces)
     vertices, faces, intersecting_pairs, source_face_indices, unique_vertex_indices = out
     return out
 

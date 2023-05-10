@@ -9,6 +9,7 @@ from numpy.linalg import norm
 from scipy.sparse import csr_array, csgraph
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
+import _geometry as bindings
 from ..points import Points
 from ..base import Geometry
 from ..bounds import AABB
@@ -333,6 +334,21 @@ class Faces(TrackedArray):
         self._mesh = getattr(obj, '_mesh', None)
 
     @property
+    def adjacency_matrix(self) -> csr_array:
+        return bindings.facet_adjacency_matrix(self)
+
+    @property
+    def adjacency_list(self) -> list[np.ndarray]:
+        """(n,) list of arrays of indices of adjacent faces for each face."""
+        adjacency = self.adjacency_matrix
+        return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
+
+    def get_face_neighbors(self, index: int) -> np.ndarray:
+        """Get the indices of faces adjacent to a given face."""
+        adjacency = self.adjacency_matrix
+        return adjacency.indices[adjacency.indptr[index] : adjacency.indptr[index + 1]]
+
+    @property
     def corners(self):
         """Vertices of each face."""
         return self._mesh.vertices.view(np.ndarray)[self]
@@ -355,7 +371,9 @@ class Faces(TrackedArray):
     def cotangents(self):
         """(n, 3) array of cotangents of corner angles for each face."""
         with np.errstate(divide="ignore", invalid="ignore"):
-            return np.reciprocal(np.tan(self.internal_angles))
+            cot = np.reciprocal(np.tan(self.internal_angles))
+        cot[~np.isfinite(cot)] = 0
+        return cot
 
     @property
     def centroids(self) -> Points:
@@ -575,11 +593,11 @@ def separate(mesh: TriangleMesh, method="vertex") -> list:
     if method == "vertex":
         incidence = mesh.vertices.adjacency_matrix
     elif method == "face":
-        incidence = mesh.faces.incidence
+        incidence = mesh.faces.adjacency_matrix
     
     n_components, labels = csgraph.connected_components(incidence, directed=False)
 
-    return [submesh(mesh, np.where(labels == i)[0]) for i in range(n_components)]
+    return [submesh(mesh, np.isin(mesh.faces, np.where(labels == i)[0]).all(axis=1)) for i in range(n_components)]
 
 
 def concatenate(meshes: Iterable[TriangleMesh]) -> TriangleMesh:
