@@ -6,13 +6,13 @@
 #include <igl/copyleft/cgal/outer_hull.h>
 #include <igl/copyleft/cgal/remesh_self_intersections.h>
 #include <igl/facet_adjacency_matrix.h>
-#include <igl/fast_find_self_intersections.h>
 #include <igl/fast_winding_number.h>
 #include <igl/is_vertex_manifold.h>
 #include <igl/piecewise_constant_winding_number.h>
 #include <igl/point_mesh_squared_distance.h>
 #include <igl/unique_edge_map.h>
 #include <igl/winding_number.h>
+#include <igl/collapse_small_triangles.h>
 #include <pybind11/eigen.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -110,15 +110,6 @@ void igl_bindings(py::module &m) {
               intersecting_face_pairs);
           return is_intersecting;
         });
-
-  // m.def("self_intersecting_faces", [](EigenDRef<MatrixXd> vertices_in,
-  //                                     EigenDRef<MatrixXi> faces_in) {
-  //   Eigen::MatrixXd vertices(vertices_in);
-  //   Eigen::MatrixXi faces(faces_in);
-  //   Eigen::MatrixXi intersecting_faces;
-  //   igl::fast_find_self_intersections(vertices, faces, intersecting_faces);
-  //   return intersecting_faces;
-  // });
 
   m.def("mesh_intersect_other",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
@@ -230,5 +221,15 @@ void igl_bindings(py::module &m) {
                          edge_map, unique_edge_to_edge_map);
     return std::make_tuple(directed_edges, unique_undirected_edges, edge_map,
                            unique_edge_to_edge_map);
+  });
+
+  m.def("collapse_small_triangles", [](EigenDRef<MatrixXd> vertices_in,
+                                       EigenDRef<MatrixXi> faces_in,
+                                       double epsilon) {
+    Eigen::MatrixXd vertices(vertices_in);
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::MatrixXi faces_out;
+    igl::collapse_small_triangles(vertices, faces, epsilon, faces_out);
+    return faces_out;
   });
 }

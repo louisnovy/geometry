@@ -256,7 +256,7 @@ class TriangleMesh(Geometry):
         squared : `bool`, optional
             If True, return squared distances.
         signed : `bool`, optional
-            If True, return signed distances. Points inside the mesh will have negative distances.
+            If True, distances inside the mesh will be negative.
         return_face_index : `bool`, optional
             If True, return the index of the closest face for each query point.
         return_closest : `bool`, optional
@@ -840,6 +840,7 @@ class Vertices(Points):
     def adjacency_list(self) -> list[np.ndarray]:
         """`list[np.ndarray]` : Neighboring vertex indices for each vertex."""
         adjacency = self.adjacency_matrix
+        # using the list comprehension is much faster than converting to a linked list in this case
         return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
     
     @property
