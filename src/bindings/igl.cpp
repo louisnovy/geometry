@@ -82,7 +82,7 @@ void igl_bindings(py::module &m) {
                            closest_points);
   });
 
-  m.def("mesh_outer_hull", [](EigenDRef<MatrixXd> vertices_in,
+  m.def("outer_hull", [](EigenDRef<MatrixXd> vertices_in,
                               EigenDRef<MatrixXi> faces_in) {
     Eigen::MatrixXd vertices(vertices_in);
     Eigen::MatrixXi faces(faces_in);
@@ -96,7 +96,7 @@ void igl_bindings(py::module &m) {
                            was_face_flipped);
   });
 
-  m.def("mesh_check_intersection",
+  m.def("check_intersection",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
            EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
           Eigen::MatrixXd verticesA(verticesA_in);
@@ -111,7 +111,7 @@ void igl_bindings(py::module &m) {
           return is_intersecting;
         });
 
-  m.def("mesh_intersect_other",
+  m.def("intersect_other",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
            EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
           Eigen::MatrixXd verticesA(verticesA_in);

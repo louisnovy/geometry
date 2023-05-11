@@ -404,11 +404,10 @@ class TriangleMesh(Geometry):
         vector = np.asanyarray(vector, dtype=np.float64)
         if vector.shape != (self.dim,):
             raise ValueError(f"Vector must have shape {(self.dim,)}")
-        mat = np.eye(self.dim + 1, dtype=np.float64)
-        mat[:self.dim, self.dim] = vector
-        return self.transform(mat)
+        return type(self)(self.vertices + vector, self.faces)
     
     # TODO: we shouldn't be building the matrix here
+    # TODO: support 2d
     def rotate(self, axis: ArrayLike, angle: float, center: ArrayLike | None = None) -> TriangleMesh:
         """Rotate by the given angle about the given axis.
 
@@ -465,6 +464,16 @@ class TriangleMesh(Geometry):
         May cause self-intersections.
         """
         return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
+    
+    def flip_normals(self) -> TriangleMesh:
+        """Flip the normals of the mesh by reversing the order of the vertices in each face.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with flipped normals.
+        """
+        return type(self)(self.vertices, self.faces[:, ::-1])
 
     def concatentate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
         """Concatenate this mesh with another mesh or list of meshes.
@@ -719,8 +728,14 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Outer hull of the mesh.
         """
-        raise NotImplementedError
-    
+        # TODO: attributes
+        # TODO: preserve original face orientation option
+        vertices, faces, sources, was_flipped = bindings.outer_hull(self.vertices, self.faces)
+        outer_hull = type(self)(vertices, faces)
+        if outer_hull.volume < 0:
+            return outer_hull.flip_normals()
+        return outer_hull
+
     def partition_into_cells(self) -> list[TriangleMesh]:
         """Partition the mesh into cells by resolving self-intersections and partitioning.
         Partitions are submeshes where any pair of points belonging the partition can be 
@@ -729,7 +744,7 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `list[TriangleMesh]`
-            List of cells.
+            List of cell meshes.
         """
         raise NotImplementedError
     
