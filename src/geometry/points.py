@@ -86,4 +86,5 @@ def downsample_grid(points: Points, pitch: float) -> Points:
     bins = np.floor(bins).astype(int)
     # find first index of each
     unique_idx = unique_rows(bins, return_index=True)[1]
-    return points[unique_idx]
+    # transform to centers of grid cells
+    return Points(points.aabb.min + (bins[unique_idx] + 0.5) * pitch)
