@@ -16,12 +16,12 @@ def load_mesh(path: str, format: str | None = None, **kwargs) -> mesh.TriangleMe
         if format in loader.extensions:
             m = mesh.TriangleMesh(*loader.load(path, **kwargs))
             if format == ".stl":
-                m = mesh.merge_duplicate_vertices(m)
+                m = m.remove_duplicated_vertices()
             return m
 
     raise ValueError(f"Unsupported mesh format: {format}")
 
-def save_mesh(path: str, mesh: mesh.TriangleMesh, format: str | None = None, **kwargs):
+def save_mesh(mesh: mesh.TriangleMesh, path: str, format: str | None = None, **kwargs):
     format = format or Path(path).suffix.lower()
     for saver in mesh_formats:
         if format in saver.extensions:

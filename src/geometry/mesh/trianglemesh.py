@@ -30,6 +30,44 @@ class TriangleMesh(Geometry):
         self._vertices: Vertices = Vertices(vertices, mesh=self)
         self._faces: Faces = Faces(faces, mesh=self)
 
+    @classmethod
+    def empty(cls, dim: int, dtype=None):
+        return cls(np.empty((0, dim), dtype=dtype))
+    
+    @classmethod
+    def load(cls, path: str, format: str | None = None, **kwargs):
+        """Load a mesh from a file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the file to load.
+        format : str, optional
+            File format to use. If not specified, will be inferred from the file extension.
+        kwargs
+            Additional keyword arguments to pass to the loader. See `formats` for details.
+
+        Returns
+        -------
+        mesh : TriangleMesh
+            A brand new mesh.
+        """
+        return load(path, format=format, **kwargs)
+    
+    def save(self, path: str, format: str | None = None, **kwargs):
+        """Save a mesh to a file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the file to save.
+        format : str, optional
+            File format to use. If not specified, will be inferred from the file extension.
+        kwargs
+            Additional keyword arguments to pass to the saver. See `formats` for details.
+        """
+        save(self, path, format=format, **kwargs)
+
     # *** Basic properties ***
 
     @property
@@ -151,6 +189,7 @@ class TriangleMesh(Geometry):
     @property
     def is_manifold(self) -> bool:
         """`bool` : True if the surface of the mesh is a 2-manifold with or without boundary."""
+        raise NotImplementedError
 
     @property
     def is_planar(self) -> bool:
@@ -183,7 +222,7 @@ class TriangleMesh(Geometry):
             Generalized winding number of each query point.
         """
         queries = np.asanyarray(queries, dtype=np.float64)
-        return bindings.winding_number(self.vertices, self.faces, queries)
+        return bindings.generalized_winding_number(self.vertices, self.faces, queries)
 
     def contains(self, queries: ArrayLike) -> np.ndarray:
         """Check if each query point is inside the mesh.
@@ -205,7 +244,7 @@ class TriangleMesh(Geometry):
         queries: ArrayLike,
         squared=False,
         signed=False,
-        return_face_index=False,
+        return_index=False,
         return_closest=False
     ):
         """Compute the distance from each query point to closest point on the surface of the mesh.
@@ -233,14 +272,17 @@ class TriangleMesh(Geometry):
             Closest point on the surface of the mesh for each query point.
         """
         queries = np.asanyarray(queries, dtype=np.float64)
-        sqdists, indices, closest = bindings.distance(self.vertices, self.faces, queries)
+        sqdists, indices, closest = bindings.point_mesh_squared_distance(queries, self.vertices, self.faces)
+
+        if not squared:
+            sqdists = np.sqrt(sqdists)
+        
         if signed:
-            contained = self.contains(queries)
-            sqdists[contained] *= -1
-        out = sqdists if squared else np.sqrt(sqdists)
-        if any([return_face_index, return_closest]):
-            out = (out,)
-            if return_face_index: out += (indices,)
+            sqdists[self.contains(queries)] *= -1
+
+        out = (sqdists,)
+        if any([return_index, return_closest]):
+            if return_index: out += (indices,)
             if return_closest: out += (Points(closest),) # TODO: attribute propagation
             return out
         return out
@@ -738,12 +780,29 @@ class TriangleMesh(Geometry):
         """
         raise NotImplementedError
     
+    def crop(self, other: TriangleMesh, invert: bool = False) -> TriangleMesh:
+        """Crop by resolving self intersections and removing all faces that are not inside the other mesh.
+
+        Parameters
+        ----------
+        other : `TriangleMesh`
+            Other mesh.
+        invert : `bool`, optional (default: False)
+            If True, invert the crop by removing all faces that are inside the other mesh instead.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Cropped mesh.
+        """
+        raise NotImplementedError
+    
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
 
     def __hash__(self) -> int:
         return hash((self.vertices, self.faces))
-
+    
 
 class Vertices(Points):
     def __new__(
