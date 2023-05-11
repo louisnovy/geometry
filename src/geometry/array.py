@@ -59,37 +59,35 @@ class TrackedArray(np.ndarray):
             return self._hash
 
     # helper that will make a new version of a method that invalidates hash
-    @staticmethod
-    def _validate(method: str) -> Callable:
+    def invalidate(method: str) -> Callable:
         def f(self: TrackedArray, *args, **kwargs):
             if hasattr(self, "_hash"):
                 del self._hash
             return getattr(super(TrackedArray, self), method)(*args, **kwargs)
-
         return f
 
     # any methods that modify useful array data in place should be wrapped
-    setfield = _validate("setfield")
-    sort = _validate("sort")
-    put = _validate("put")
-    fill = _validate("fill")
-    itemset = _validate("itemset")
-    byteswap = _validate("byteswap")
-    partition = _validate("partition")
-    __setitem__ = _validate("__setitem__")
-    __delitem__ = _validate("__delitem__")
-    __iadd__ = _validate("__iadd__")
-    __isub__ = _validate("__isub__")
-    __imul__ = _validate("__imul__")
-    __idiv__ = _validate("__idiv__")
-    __itruediv__ = _validate("__itruediv__")
-    __ifloordiv__ = _validate("__ifloordiv__")
-    __imod__ = _validate("__imod__")
-    __ipow__ = _validate("__ipow__")
-    __ilshift__ = _validate("__ilshift__")
-    __irshift__ = _validate("__irshift__")
-    __iand__ = _validate("__iand__")
-    __ixor__ = _validate("__ixor__")
-    __ior__ = _validate("__ior__")
+    setfield = invalidate("setfield")
+    sort = invalidate("sort")
+    put = invalidate("put")
+    fill = invalidate("fill")
+    itemset = invalidate("itemset")
+    byteswap = invalidate("byteswap")
+    partition = invalidate("partition")
+    __setitem__ = invalidate("__setitem__")
+    __delitem__ = invalidate("__delitem__")
+    __iadd__ = invalidate("__iadd__")
+    __isub__ = invalidate("__isub__")
+    __imul__ = invalidate("__imul__")
+    __idiv__ = invalidate("__idiv__")
+    __itruediv__ = invalidate("__itruediv__")
+    __ifloordiv__ = invalidate("__ifloordiv__")
+    __imod__ = invalidate("__imod__")
+    __ipow__ = invalidate("__ipow__")
+    __ilshift__ = invalidate("__ilshift__")
+    __irshift__ = invalidate("__irshift__")
+    __iand__ = invalidate("__iand__")
+    __ixor__ = invalidate("__ixor__")
+    __ior__ = invalidate("__ior__")
 
-    del _validate
+    del invalidate
