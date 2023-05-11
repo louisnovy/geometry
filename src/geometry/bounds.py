@@ -18,6 +18,10 @@ class AABB(Geometry):
         if not self.min.shape == self.max.shape:
             raise ValueError("min and max must have the same shape")
 
+    def sample(self, n_samples=1):
+        """Uniformly sample `n` points within the AABB."""
+        return np.random.uniform(self.min, self.max, (n_samples, *self.min.shape))
+
     def contains(self, queries: ArrayLike):
         """Array of booleans indicating whether each query point is contained within the AABB."""
         queries = np.asanyarray(queries)
@@ -37,10 +41,10 @@ class AABB(Geometry):
 
     @property
     def diagonal(self) -> float:
-        return np.linalg.norm(self.extents)
+        return float(np.linalg.norm(self.extents))
 
     def __getitem__(self, i):
-        return np.array([self.min, self.max])[i]  # allows: min, max = AABB and passing to AABB constructor
+        return (self.min, self.max)[i] # allows: min, max = AABB and passing to AABB constructor
 
     # def __array__
 
@@ -53,7 +57,6 @@ class AABB(Geometry):
 
 class OBB:
     pass
-
 
 class BVH:
     pass
