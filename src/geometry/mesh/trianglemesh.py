@@ -20,13 +20,15 @@ from ..array import TrackedArray
 property = cached_property # TODO: custom property decorator for caching cleanly
 
 class TriangleMesh(Geometry):
+    __slots__ = ("_vertices", "_faces")
+
     def __init__(
         self,
         vertices: ArrayLike | None = None,
         faces: ArrayLike | None = None,
     ):
-        self.vertices: Vertices = Vertices(vertices, mesh=self)
-        self.faces: Faces = Faces(faces, mesh=self)
+        self._vertices: Vertices = Vertices(vertices, mesh=self)
+        self._faces: Faces = Faces(faces, mesh=self)
 
     # *** Basic properties ***
 
@@ -34,11 +36,21 @@ class TriangleMesh(Geometry):
     def dim(self):
         """`int` : Number of dimensions of the mesh."""
         return self.vertices.dim
+    
+    @property
+    def vertices(self) -> Vertices:
+        """`Vertices` : Vertices of the mesh."""
+        return self._vertices
 
     @property
     def n_vertices(self) -> int:
         """`int` : Number of `Vertices` in the mesh."""
         return len(self.vertices)
+    
+    @property
+    def faces(self) -> Faces:
+        """`Faces` : Faces of the mesh."""
+        return self._faces
 
     @property
     def n_faces(self) -> int:
@@ -232,7 +244,500 @@ class TriangleMesh(Geometry):
             if return_closest: out += (Points(closest),) # TODO: attribute propagation
             return out
         return out
+    
+    def sample_surface(
+        self,
+        n_samples: int,
+        return_index: bool = False,
+        barycentric_weights = (1, 1, 1),
+        face_weights = None,
+        seed: int | None = None,
+    ) -> Points | tuple[Points, np.ndarray]:
+        """Sample points uniformly from the surface of the mesh.
+        
+        Parameters
+        ----------
+        n_samples : `int`
+            Number of samples to generate.
+        return_index : `bool`, optional
+            If True, also return the index of the face that each sample was mapped to.
+        barycentric_weights : `tuple[float, float, float]`, optional
+            Weights for sampling barycentric coordinates. The default is uniform sampling.
+        face_weights : `ndarray (n_faces,)`, optional
+            Probability distribution for sampling faces. The default is uniform sampling.
+        seed : `int`, optional
+            Random seed for reproducible results.
 
+        Returns
+        -------
+        `Points (n_samples, dim)`
+            Sampled points.
+        `ndarray (n_samples,)` (optional)
+            Index of the face that each sample was mapped to.
+        """
+
+        if self.is_empty:
+            raise ValueError("Cannot sample from an empty mesh.")
+        if face_weights is None:
+            double_areas = self.faces.double_areas
+            face_weights = double_areas / double_areas.sum()
+        else:
+            face_weights = np.asarray(face_weights)
+            if not all([
+                face_weights.ndim == 1,
+                len(face_weights) == len(self.faces),
+                np.allclose(face_weights.sum(), 1),
+            ]):
+                raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
+        rng = np.random.default_rng(seed)
+        # distribute samples on the simplex
+        barycentric = rng.dirichlet(barycentric_weights, size=n_samples)
+        # choose a random face for each sample to map to
+        face_indices = np.searchsorted(np.cumsum(face_weights), rng.random(n_samples))
+        # map samples on the simplex to each face with a linear combination of the face's corners
+        samples = np.einsum("ij,ijk->ik", barycentric, self.faces.corners[face_indices])
+
+        return (samples, face_indices) if return_index else samples
+    
+    # *** Transformations ***
+
+    def transform(self, matrix: ArrayLike) -> TriangleMesh:
+        """Transform the mesh by the given matrix.
+
+        Parameters
+        ----------
+        matrix : `ArrayLike` (dim + 1, dim + 1)
+            Transformation matrix.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Transformed mesh.
+        """
+        matrix = np.asanyarray(matrix, dtype=np.float64)
+        if matrix.shape != (self.dim + 1, self.dim + 1):
+            raise ValueError(f"Transformation matrix must have shape {(self.dim + 1, self.dim + 1)}")
+        new_vertices = self.vertices @ matrix[:self.dim, :self.dim].T + matrix[:self.dim, self.dim]
+        return type(self)(new_vertices, self.faces)
+    
+    def scale(self, factor: float, center: ArrayLike | None = None) -> TriangleMesh:
+        """Scale by the given factor.
+
+        Parameters
+        ----------
+        factor : `float`
+            Scaling factor.
+        center : `ArrayLike` (dim,), optional
+            Center of the scaling operation. The default is the origin.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Scaled mesh.
+        """
+        mat = np.eye(self.dim + 1, dtype=np.float64)
+        mat[:self.dim, :self.dim] *= factor
+    
+        if center is not None:
+            center = np.asanyarray(center, dtype=np.float64)
+            if center.shape != (self.dim,):
+                raise ValueError(f"Center must have shape {(self.dim,)}")
+            mat[:self.dim, self.dim] = center * (1 - factor)
+    
+        return self.transform(mat)
+    
+    def translate(self, vector: ArrayLike) -> TriangleMesh:
+        """Translate by the given vector.
+
+        Parameters
+        ----------
+        vector : `ArrayLike` (dim,)
+            Translation vector.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Translated mesh.
+        """
+        vector = np.asanyarray(vector, dtype=np.float64)
+        if vector.shape != (self.dim,):
+            raise ValueError(f"Vector must have shape {(self.dim,)}")
+        mat = np.eye(self.dim + 1, dtype=np.float64)
+        mat[:self.dim, self.dim] = vector
+        return self.transform(mat)
+    
+    # TODO: we shouldn't be building the matrix here
+    def rotate(self, axis: ArrayLike, angle: float, center: ArrayLike | None = None) -> TriangleMesh:
+        """Rotate by the given angle about the given axis.
+
+        Parameters
+        ----------
+        axis : `ArrayLike` (dim,)
+            Rotation axis.
+        angle : `float`
+            Rotation angle (in radians).
+        center : `ArrayLike` (dim,), optional
+            Center of the rotation operation. The default is the origin.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Rotated mesh.
+        """
+        axis = np.asanyarray(axis, dtype=np.float64)
+        if axis.shape != (self.dim,):
+            raise ValueError(f"Axis must have shape {(self.dim,)}")
+        axis /= np.linalg.norm(axis)
+        ux, uy, uz = axis
+        c = np.cos(angle)
+        s = np.sin(angle)
+        mat = np.array([
+            [c + ux**2 * (1 - c), ux * uy * (1 - c) - uz * s, ux * uz * (1 - c) + uy * s, 0],
+            [uy * ux * (1 - c) + uz * s, c + uy**2 * (1 - c), uy * uz * (1 - c) - ux * s, 0],
+            [uz * ux * (1 - c) - uy * s, uz * uy * (1 - c) + ux * s, c + uz**2 * (1 - c), 0],
+            [0, 0, 0, 1],
+        ], dtype=np.float64)
+        if center is not None:
+            center = np.asanyarray(center, dtype=np.float64)
+            if center.shape != (self.dim,):
+                raise ValueError(f"Center must have shape {(self.dim,)}")
+            mat[:self.dim, self.dim] = center - center @ mat[:self.dim, :self.dim]
+        return self.transform(mat)
+
+    # TODO: maybe name offset?
+    def dilate(self, offset: float = 0) -> TriangleMesh:
+        """Dilate the mesh by moving each vertex along its normal by the given offset.
+
+        Parameters
+        ----------
+        offset : `float`, optional
+            Offset to move each vertex along its normal. The default is 0.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Dilated mesh.
+
+        Notes
+        -----
+        May cause self-intersections.
+        """
+        return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
+
+    def concatentate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
+        """Concatenate this mesh with another mesh or list of meshes.
+
+        Parameters
+        ----------
+        other : `TriangleMesh` or `list[TriangleMesh]`
+            Mesh or meshes to concatenate.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Concatenated mesh.
+        """
+        if not isinstance(other, list):
+            other = [other]
+
+        if not all(isinstance(m, type(self)) for m in other):
+            raise ValueError(f"Meshes must all be of the same type: {type(self)}")
+    
+        indices = np.cumsum([0] + [m.n_vertices for m in other])
+        vertices = np.concatenate([self.vertices] + [m.vertices for m in other])
+        faces = np.concatenate([self.faces] + [m.faces + indices[i] for i, m in enumerate(other)])
+
+        return type(self)(vertices, faces)
+    
+    def submesh(self, face_indices: ArrayLike) -> TriangleMesh:
+        """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
+        
+        Parameters
+        ----------
+        face_indices : `ArrayLike` (n_faces,)
+            Indices of the faces to keep.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Submesh.
+        """
+        face_indices = np.asanyarray(face_indices)
+        return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
+    
+    def separate(self, connectivity: Literal["vertex", "face"] = "face") -> list[TriangleMesh]:
+        """Return a list of meshes, each representing a connected component of the mesh.
+        
+        Parameters
+        ----------
+        connectivity : `str`, optional (default: "face")
+            Connectivity method. Can be "vertex" or "face".
+
+        Returns
+        -------
+        `list[TriangleMesh]`
+            List of meshes.
+
+        Notes
+        -----
+        While vertex-based connectivity is faster, it is less robust than face connectivity.
+        For example, the de-duplication when saving and loading an STL file will result in
+        new connectivity if vertices are too close.
+        """
+
+        if connectivity == "vertex":
+            incidence = self.vertices.adjacency_matrix
+            get_indices = lambda i: np.isin(self.faces, np.nonzero(i == labels)[0]).any(axis=1)
+        elif connectivity == "face":
+            incidence = self.faces.adjacency_matrix
+            get_indices = lambda i: np.squeeze(np.argwhere(i == labels))
+        else:
+            raise ValueError(f"Unknown connectivity: {connectivity}")
+
+        n_components, labels = csgraph.connected_components(incidence, directed=False)
+        return [self.submesh(get_indices(i)) for i in range(n_components)]
+
+    
+    # *** Mesh cleaning ***
+    
+    def remove_unreferenced_vertices(self) -> TriangleMesh:
+        """Remove vertices that are not referenced by any face.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with only referenced vertices.
+        """
+        referenced = self.vertices.referenced
+        return type(self)(self.vertices[referenced], np.cumsum(referenced)[self.faces] - 1)
+    
+    # TODO: should be called merge_close_vertices?
+    def remove_duplicated_vertices(self, epsilon: float = 0) -> TriangleMesh:
+        """Remove duplicate vertices closer than rounding error 'epsilon'.
+        
+        Parameters
+        ----------
+        epsilon : `float`, optional (default: 0)
+            Rounding error threshold.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with duplicate vertices removed.
+
+        Notes
+        -----
+        This will NOT remove faces and only renumbers the indices creating
+        duplicate and degenerate faces if epsilon is not kept in check.
+        This operation is used mainly for snapping together a triangle soup like an stl file.
+        """
+        vertices, faces = self.vertices, self.faces
+
+        if epsilon > 0:
+            vertices = vertices.round(int(-np.log10(epsilon)))
+
+        unique, inverse = unique_rows(vertices, return_inverse=True)
+        return type(self)(unique, inverse[faces])
+    
+    def remove_degenerated_faces(self, epsilon: float = 1e-12) -> TriangleMesh:
+        """Remove faces with area smaller than 'epsilon'.
+
+        Parameters
+        ----------
+        epsilon : `float`, optional (default: 0)
+            Area threshold.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with small faces removed.
+        """
+        raise NotImplementedError
+    
+    def remove_duplicated_faces(self) -> TriangleMesh:
+        """Remove duplicate faces.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with duplicate faces removed.
+        """
+        raise NotImplementedError
+
+    def remove_obtuse_triangles(self, max_angle: float = 90) -> TriangleMesh:
+        """Remove triangles with any internal angle greater than 'max_angle'.
+
+        Parameters
+        ----------
+        max_angle : `float`, optional (default: 90)
+            Maximum internal angle.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with obtuse triangles removed.
+        """
+        raise NotImplementedError
+    
+    # *** Remeshing ***
+
+    def resolve_self_intersections(self) -> TriangleMesh:
+        """Resolve self-intersections by creating new edges where faces intersect.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with self-intersections resolved.
+        """
+        raise NotImplementedError
+    
+    def collapse_short_edges(self, length: float | None = None) -> TriangleMesh:
+        """Collapse edges shorter than 'length'.
+
+        Parameters
+        ----------
+        length : `float`, optional (default: None)
+            Length threshold. If None, the average edge length is used.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with short edges collapsed.
+        """
+        raise NotImplementedError
+    
+    def split_long_edges(self, length: float | None = None) -> TriangleMesh:
+        """Split edges longer than 'length'.
+
+        Parameters
+        ----------
+        length : `float`, optional (default: None)
+            Length threshold. If None, the average edge length is used.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with long edges split.
+        """
+        raise NotImplementedError
+    
+    def subdivide(self, method: Literal["midpoint", "loop"] = "midpoint") -> TriangleMesh:
+        """Subdivide the mesh.
+
+        Parameters
+        ----------
+        method : `str`, optional (default: "midpoint")
+            Subdivision method. Can be "midpoint" or "loop".
+
+        Returns
+        -------
+        `TriangleMesh`
+            Subdivided mesh.
+        """
+        raise NotImplementedError
+    
+    def decimate(self, n_faces: int | None = None, method: Literal["quadric", "edge_collapse"] = "quadric") -> TriangleMesh:
+        """Decimate the mesh.
+
+        Parameters
+        ----------
+        n_faces : `int`, optional (default: None)
+            Target number of faces. If None, the mesh is reduced by half.
+        method : `str`, optional (default: "quadric")
+            Decimation method. Can be "quadric" or "edge_collapse".
+
+        Returns
+        -------
+        `TriangleMesh`
+            Decimated mesh.
+        """
+        raise NotImplementedError
+
+    def convex_hull(self, joggle_on_failure: bool = True) -> TriangleMesh:
+        """Compute the convex hull.
+
+        Parameters
+        ----------
+        joggle_on_failure : `bool`, optional (default: True)
+            If True, joggle the points if degeneracies are encountered.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Convex hull of the mesh.
+        """
+        return convex_hull(self, joggle_on_failure=joggle_on_failure)
+    
+    def outer_hull(self) -> TriangleMesh:
+        """Compute the outer hull by resolving self-intersections, removing all internal faces, and
+        correcting the winding order.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Outer hull of the mesh.
+        """
+        raise NotImplementedError
+    
+    def partition_into_cells(self) -> list[TriangleMesh]:
+        """Partition the mesh into cells by resolving self-intersections and partitioning.
+        Partitions are submeshes where any pair of points belonging the partition can be 
+        connected by a curve without ever going through any faces.
+
+        Returns
+        -------
+        `list[TriangleMesh]`
+            List of cells.
+        """
+        raise NotImplementedError
+    
+    # *** CSG ***
+    
+    def union(self, other: TriangleMesh) -> TriangleMesh:
+        """Compute the union of two meshes.
+
+        Parameters
+        ----------
+        other : `TriangleMesh`
+            Other mesh.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Union of the two meshes.
+        """
+        raise NotImplementedError
+    
+    def intersection(self, other: TriangleMesh) -> TriangleMesh:
+        """Compute the intersection of two meshes.
+
+        Parameters
+        ----------
+        other : `TriangleMesh`
+            Other mesh.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Intersection of the two meshes.
+        """
+        raise NotImplementedError
+    
+    def difference(self, other: TriangleMesh) -> TriangleMesh:
+        """Compute the difference of two meshes.
+
+        Parameters
+        ----------
+        other : `TriangleMesh`
+            Other mesh.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Difference of the two meshes.
+        """
+        raise NotImplementedError
+    
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
 
@@ -648,97 +1153,6 @@ class Edges(TrackedArray):
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
 
 
-def submesh(mesh: TriangleMesh, face_indices: ArrayLike, invert: bool = False) -> TriangleMesh:
-    """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
-    If `invert` is True, return a mesh with all faces *except* those in `face_indices`."""
-    face_indices = np.asanyarray(face_indices)
-    if invert:
-        face_indices = np.setdiff1d(np.arange(mesh.n_faces), face_indices)
-    m = type(mesh)(mesh.vertices, mesh.faces[face_indices])
-    return remove_unreferenced_vertices(m)
-
-
-def separate(mesh: TriangleMesh, method="face") -> list:
-    """Return a list of meshes, each representing a connected component of the mesh.
-    Note that while vertex-based connectivity is faster, it can change if the mesh is
-    saved and reloaded from an stl file due to vertices being merged.
-    """
-    if method == "vertex":
-        incidence = mesh.vertices.adjacency_matrix
-        get_indices = lambda i: np.isin(mesh.faces, np.nonzero(i == labels)[0]).any(axis=1)
-    elif method == "face":
-        incidence = mesh.faces.adjacency_matrix
-        get_indices = lambda i: np.squeeze(np.argwhere(i == labels))
-    else:
-        raise ValueError(f"Unknown method: {method}")
-
-    n_components, labels = csgraph.connected_components(incidence, directed=False)
-    return [submesh(mesh, get_indices(i)) for i in range(n_components)]
-
-
-def concatenate(meshes: list[TriangleMesh]) -> TriangleMesh:
-    """Concatenate a list of meshes into a single mesh with multiple connected components."""
-    if not all(isinstance(m, type(meshes[0])) for m in meshes):
-        raise ValueError(f"Meshes must all be of the same type: {type(meshes[0])}")
-    
-    indices = np.cumsum([0] + [m.n_vertices for m in meshes])
-    vertices = np.concatenate([m.vertices for m in meshes])
-    faces = np.concatenate([m.faces + indices[i] for i, m in enumerate(meshes)])
-
-    return type(meshes[0])(vertices, faces)
-
-
-def remove_unreferenced_vertices(mesh: TriangleMesh) -> TriangleMesh:
-    """Remove any vertices that are not referenced by any face. Indices are renumbered accordingly."""
-    referenced = mesh.vertices.referenced
-    return type(mesh)(mesh.vertices[referenced], np.cumsum(referenced)[mesh.faces] - 1)
-
-
-def merge_duplicate_vertices(mesh: TriangleMesh, epsilon: float = 0) -> TriangleMesh:
-    """Merge duplicate vertices closer than rounding error 'epsilon'.
-
-    Note: This will NOT remove faces and only renumbers the indices creating
-    duplicate and degenerate faces if epsilon is not kept in check.
-    This operation is mainly used for snapping together a triangle soup like an stl file."""
-    vertices, faces = mesh.vertices, mesh.faces
-
-    if epsilon > 0:
-        vertices = vertices.round(int(-np.log10(epsilon)))
-
-    unique, index, inverse = unique_rows(vertices, return_index=True, return_inverse=True)
-    return type(mesh)(unique, inverse[faces])
-
-
-def remove_duplicate_faces(mesh: TriangleMesh) -> TriangleMesh:
-    raise NotImplementedError
-
-
-def resolve_self_intersection(mesh: TriangleMesh) -> TriangleMesh:
-    raise NotImplementedError
-
-
-def subdivide_midpoint(mesh: TriangleMesh, n: int = 1) -> TriangleMesh:
-    """Subdivide each triangle into four new triangles by adding a vertex at the midpoint of each edge."""
-    # A triangle [0,1,2] is replaced with four new triangles:
-    # [[0,3,5], [3,1,4], [5,4,2], [5,3,4]]
-    # where 3, 4, and 5 are the midpoints of the edges [0,1], [1,2], and [2,0] respectively.
-
-
-def subdivide_loop(mesh: TriangleMesh) -> TriangleMesh:
-    raise NotImplementedError
-
-
-def split_long_edges(mesh: TriangleMesh, threshold: float) -> TriangleMesh:
-    raise NotImplementedError
-
-
-def collapse_short_edges(mesh: TriangleMesh, threshold: float) -> TriangleMesh:
-    raise NotImplementedError
-
-
-def invert_faces(mesh: TriangleMesh) -> TriangleMesh:
-    """Reverse the winding order of all faces which flips the mesh "inside out"."""
-    return type(mesh)(mesh.vertices, mesh.faces[:, ::-1])
 
 
 def convex_hull(
@@ -810,40 +1224,7 @@ def smooth_taubin(
     raise NotImplementedError
 
 
-def dilate(mesh: TriangleMesh, offset: float) -> TriangleMesh:
-    """Dilate by `offset` along vertex normals. May introduce self-intersections."""
-    return type(mesh)(mesh.vertices + offset * mesh.vertices.normals, mesh.faces)
-
-
-def erode(mesh: TriangleMesh, offset: float) -> TriangleMesh:
-    """Erode by `offset` along vertex normals. May introduce self-intersections."""
-    return dilate(mesh, -offset)
-
-
 from .boolean import boolean, check_intersection as _check_intersection
-
-def union(
-    a: TriangleMesh,
-    b: TriangleMesh,
-) -> TriangleMesh:
-    return boolean(a, b, "union")
-
-
-def intersection(
-    a: TriangleMesh,
-    b: TriangleMesh,
-    clip: bool = False
-) -> TriangleMesh:
-    return boolean(a, b, "intersection")
-
-
-def difference(
-    a: TriangleMesh,
-    b: TriangleMesh,
-    clip: bool = False
-) -> TriangleMesh:
-    return boolean(a, b, "difference")
-
 
 def check_intersection(
     a: TriangleMesh,
@@ -851,41 +1232,3 @@ def check_intersection(
 ) -> bool:
     return _check_intersection(a, b)
 
-
-def sample_surface(
-    mesh: TriangleMesh,
-    n_samples: int,
-    face_weights: np.ndarray | None = None,
-    barycentric_weights = (1, 1, 1),
-    return_index: bool = False,
-    sample_attributes: Literal["vertex", "face", None] = None,
-    seed: int | None = None,
-) -> Points | tuple[Points, np.ndarray]:
-    """Sample points from the surface of a mesh."""
-
-    if mesh.is_empty:
-        raise ValueError("Cannot sample from an empty mesh.")
-    if face_weights is None:
-        double_areas = mesh.faces.double_areas
-        face_weights = double_areas / double_areas.sum()
-    else:
-        face_weights = np.asarray(face_weights)
-        if not all([
-            face_weights.ndim == 1,
-            len(face_weights) == len(mesh.faces),
-            np.allclose(face_weights.sum(), 1),
-        ]):
-            raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
-    rng = np.random.default_rng(seed)
-    # distribute samples on the simplex
-    barycentric = rng.dirichlet(barycentric_weights, size=n_samples)
-    # choose a random face for each sample to map to
-    face_indices = np.searchsorted(np.cumsum(face_weights), rng.random(n_samples))
-    # map samples on the simplex to each face with a linear combination of the face's corners
-    samples = np.einsum("ij,ijk->ik", barycentric, mesh.faces.corners[face_indices])
-
-    if sample_attributes is not None:
-        # TODO: when attributes are implemented, float vertex attributes should be interpolated
-        raise NotImplementedError
-        
-    return (samples, face_indices) if return_index else samples
