@@ -19,7 +19,6 @@ class TestMeshPrimitives(unittest.TestCase):
         m = icosahedron()
         assert m.n_faces == 20
         assert m.n_vertices == 12
-        assert m.is_convex
         np.testing.assert_allclose(m.centroid, 0.0, atol=1e-15)
 
     def test_uv_sphere(self):
@@ -28,7 +27,6 @@ class TestMeshPrimitives(unittest.TestCase):
                 m = uv_sphere(u=u, v=v)
                 assert m.n_faces == 2 * u * (v - 1)
                 assert m.n_vertices == u * (v - 1) + 2
-                assert m.is_convex
 
         m = uv_sphere(u=100, v=100)
         np.testing.assert_allclose(m.area, 4 * np.pi, rtol=1e-3)

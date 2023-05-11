@@ -50,14 +50,15 @@ def polygons_to_triangles(polygons) -> np.ndarray:
         # naively makes fans. doesn't account for concavity
         triangles = []
         for polygon in polygons:
-            if len(polygon) < 3: continue
+            if len(polygon) < 3:
+                continue
             triangles.append(np.array([polygon[0], polygon[1], polygon[2]]))
             for i in range(3, len(polygon)):
-                triangles.append(np.array([polygon[0], polygon[i-1], polygon[i]]))
+                triangles.append(np.array([polygon[0], polygon[i - 1], polygon[i]]))
         return np.array(triangles)
-    
+
     def triangulate_fast(polygons):
-        if len(polygons[0]) == 3: # already triangles
+        if len(polygons[0]) == 3:  # already triangles
             return polygons
         # TODO: we can implement fast vectorized version because polygons are homogeneous
         return triangulate_slow(polygons)

@@ -6,6 +6,10 @@
 #include <igl/copyleft/cgal/outer_hull.h>
 #include <igl/copyleft/cgal/remesh_self_intersections.h>
 #include <igl/facet_adjacency_matrix.h>
+#include <igl/fast_find_self_intersections.h>
+#include <igl/fast_winding_number.h>
+#include <igl/is_vertex_manifold.h>
+#include <igl/piecewise_constant_winding_number.h>
 #include <igl/point_mesh_squared_distance.h>
 #include <igl/unique_edge_map.h>
 #include <igl/winding_number.h>
@@ -107,6 +111,15 @@ void igl_bindings(py::module &m) {
           return is_intersecting;
         });
 
+  // m.def("self_intersecting_faces", [](EigenDRef<MatrixXd> vertices_in,
+  //                                     EigenDRef<MatrixXi> faces_in) {
+  //   Eigen::MatrixXd vertices(vertices_in);
+  //   Eigen::MatrixXi faces(faces_in);
+  //   Eigen::MatrixXi intersecting_faces;
+  //   igl::fast_find_self_intersections(vertices, faces, intersecting_faces);
+  //   return intersecting_faces;
+  // });
+
   m.def("mesh_intersect_other",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
            EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
@@ -139,6 +152,37 @@ void igl_bindings(py::module &m) {
                            source_face_indices, unique_vertex_indices);
   });
 
+  m.def("is_vertex_manifold", [](EigenDRef<MatrixXi> faces_in) {
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::VectorXi is_vertex_manifold;
+    igl::is_vertex_manifold(faces, is_vertex_manifold);
+    return is_vertex_manifold;
+  });
+
+  m.def("is_self_intersecting", [](EigenDRef<MatrixXd> vertices_in,
+                                   EigenDRef<MatrixXi> faces_in) {
+    Eigen::MatrixXd vertices(vertices_in);
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::MatrixXd vertices_out;
+    Eigen::MatrixXi faces_out;
+    Eigen::VectorXi intersecting_face_pairs;
+    Eigen::VectorXi source_face_indices;
+    Eigen::VectorXi unique_vertex_indices;
+    igl::copyleft::cgal::RemeshSelfIntersectionsParam params;
+    params.detect_only = true;
+    params.first_only = true;
+    igl::copyleft::cgal::remesh_self_intersections(
+        vertices, faces, params, vertices_out, faces_out,
+        intersecting_face_pairs, source_face_indices, unique_vertex_indices);
+    return intersecting_face_pairs.size() > 0;
+  });
+
+  // TODO: pass in edge map to avoid recomputing
+  m.def("piecewise_constant_winding_number", [](EigenDRef<MatrixXi> faces_in) {
+    Eigen::MatrixXi faces(faces_in);
+    return igl::piecewise_constant_winding_number(faces);
+  });
+
   m.def("generalized_winding_number",
         [](EigenDRef<MatrixXd> vertices_in, EigenDRef<MatrixXi> faces_in,
            EigenDRef<MatrixXd> query_points_in) {
@@ -149,6 +193,17 @@ void igl_bindings(py::module &m) {
           igl::winding_number(vertices, faces, query_points, winding_numbers);
           return winding_numbers;
         });
+
+  m.def("fast_winding_number", [](EigenDRef<MatrixXd> vertices_in,
+                                  EigenDRef<MatrixXi> faces_in,
+                                  EigenDRef<MatrixXd> query_points_in) {
+    Eigen::MatrixXd vertices(vertices_in);
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::MatrixXd query_points(query_points_in);
+    Eigen::VectorXd winding_numbers;
+    igl::fast_winding_number(vertices, faces, query_points, winding_numbers);
+    return winding_numbers;
+  });
 
   m.def("convex_hull", [](EigenDRef<MatrixXd> points_in) {
     Eigen::MatrixXd points(points_in);
