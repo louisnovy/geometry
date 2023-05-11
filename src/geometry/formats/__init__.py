@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from .. import mesh
-from . import stl, off
+from . import stl, off, obj
 
-mesh_formats = [stl, off]
+mesh_formats = [stl, off, obj]
 
 # TODO: loader/saver should deal with the special cases when requested a mesh object instead of
 # vertices/faces arrays instead of dealing with it here. this way a pointcloud can be requested
 # in the case of .ply for instance
 
-def load_mesh(path: str, format: str = None, **kwargs) -> mesh.TriangleMesh:
+def load_mesh(path: str, format: str | None = None, **kwargs) -> mesh.TriangleMesh:
     format = format or Path(path).suffix.lower()
     for loader in mesh_formats:
         if format in loader.extensions:
@@ -21,7 +21,7 @@ def load_mesh(path: str, format: str = None, **kwargs) -> mesh.TriangleMesh:
 
     raise ValueError(f"Unsupported mesh format: {format}")
 
-def save_mesh(path: str, mesh: mesh.TriangleMesh, format: str = None, **kwargs):
+def save_mesh(path: str, mesh: mesh.TriangleMesh, format: str | None = None, **kwargs):
     format = format or Path(path).suffix.lower()
     for saver in mesh_formats:
         if format in saver.extensions:

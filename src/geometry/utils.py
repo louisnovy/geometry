@@ -20,7 +20,7 @@ def smootherstep(a, b, x=0.5):
     return x * x * x * (x * (x * 6 - 15) + 10)
 
 
-def unique_rows(a: ArrayLike, **kwargs):
+def unique_rows(a: ArrayLike, **kwargs) -> np.ndarray:
     """A significantly faster version of np.unique(array, axis=0, **kwargs). For 2D arrays.
     https://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array"""
 
@@ -43,3 +43,29 @@ def unitize(array: np.ndarray, axis=-1, nan=0.0) -> np.ndarray:
         unit = array / np.linalg.norm(array, axis=axis, keepdims=True)
     unit[np.isnan(unit)] = nan
     return unit
+
+
+def polygons_to_triangles(polygons) -> np.ndarray:
+    def triangulate_slow(polygon):
+        # naively makes fans. doesn't account for concavity
+        triangles = []
+        for polygon in polygons:
+            if len(polygon) < 3: continue
+            triangles.append(np.array([polygon[0], polygon[1], polygon[2]]))
+            for i in range(3, len(polygon)):
+                triangles.append(np.array([polygon[0], polygon[i-1], polygon[i]]))
+        return np.array(triangles)
+    
+    def triangulate_fast(polygons):
+        if len(polygons[0]) == 3: # already triangles
+            return polygons
+        # TODO: we can implement fast vectorized version because polygons are homogeneous
+        return triangulate_slow(polygons)
+
+    try:
+        # if successful, we can use the fast version since we have a homogeneous set of polygons
+        polygons = np.asarray(polygons)
+    except ValueError:
+        return triangulate_slow(polygons)
+
+    return triangulate_fast(polygons)
