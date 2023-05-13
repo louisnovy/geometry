@@ -59,7 +59,7 @@ class TrackedArray(np.ndarray):
             return self._hash
 
     # helper that will make a new version of a method that invalidates hash
-    def invalidate(method: str) -> Callable:
+    def invalidate(method: str) -> Callable: # type: ignore
         def f(self: TrackedArray, *args, **kwargs):
             if hasattr(self, "_hash"):
                 del self._hash

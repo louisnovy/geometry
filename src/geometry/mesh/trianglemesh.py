@@ -11,7 +11,7 @@ from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 import _geometry as bindings
 from ..points import Points
-from ..base import Geometry
+from ..base import Geometry, ArrayLikeObject
 from ..bounds import AABB
 from ..utils import unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
@@ -30,8 +30,8 @@ class TriangleMesh(Geometry):
         vertex_attributes: dict | None = None,
         face_attributes: dict | None = None,
     ):
-        self._vertices: Vertices = Vertices(vertices, mesh=self, attributes=vertex_attributes)
-        self._faces: Faces = Faces(faces, mesh=self, attributes=face_attributes)
+        self._vertices: Vertices = Vertices(vertices, attributes=vertex_attributes, parent=self)
+        self._faces: Faces = Faces(faces, attributes=face_attributes, parent=self)
         self._attributes = AttributeCache(attributes)
 
     @classmethod
@@ -866,12 +866,12 @@ class TriangleMesh(Geometry):
         m = self
         fig.add_trace(
             go.Mesh3d(
-                x=m.vertices[:, 0],
-                y=m.vertices[:, 1],
-                z=m.vertices[:, 2],
-                i=m.faces[:, 0],
-                j=m.faces[:, 1],
-                k=m.faces[:, 2],
+                x=m.vertices.data[:, 0],
+                y=m.vertices.data[:, 1],
+                z=m.vertices.data[:, 2],
+                i=m.faces.data[:, 0],
+                j=m.faces.data[:, 1],
+                k=m.faces.data[:, 2],
                 flatshading=True,
                 opacity=opacity,
                 # lighting=dict(ambient=0.8, diffuse=0.5, fresnel=0.1, specular=0.8, roughness=0.0),
@@ -907,26 +907,6 @@ class TriangleMesh(Geometry):
     
 
 class Vertices(Points):
-    def __new__(
-        cls,
-        vertices: ArrayLike,
-        mesh: TriangleMesh,
-        attributes: dict | None = None,
-    ):
-        if vertices is None:
-            vertices = np.empty((0, 3), dtype=np.float64)
-        self = super().__new__(cls, vertices, attributes, dtype=np.float64)
-        self._mesh = mesh # type: ignore
-        return self
-
-    @property
-    def mesh(self) -> TriangleMesh | None:
-        """`TriangleMesh` : Parent mesh of this object."""
-        return getattr(self, "_mesh", None)
-
-    def __array_finalize__(self, obj):
-        if obj is None: return
-        self._mesh = getattr(obj, '_mesh', None)
 
     @cached_attribute
     def adjacency_matrix(self) -> csr_array:
@@ -935,7 +915,7 @@ class Vertices(Points):
         The adjacency matrix is a square matrix with a row and column for each vertex.
         The value of each entry is True if the corresponding vertices are connected by an edge.
         """
-        edges = self._mesh.halfedges.reshape(-1, 2)
+        edges = self.parent.halfedges.reshape(-1, 2)
         n_vertices = len(self)
         data = np.ones(len(edges), dtype=bool)
         return csr_array((data, edges.T), shape=(n_vertices, n_vertices))
@@ -954,7 +934,7 @@ class Vertices(Points):
         The incidence matrix is a matrix with a row for each vertex and a column for each face.
         The value of each entry is True if the corresponding vertex is incident to the corresponding face.
         """
-        faces = self._mesh.faces
+        faces = self.parent.faces
         row = faces.ravel()
         # repeat for each vertex in face
         col = np.repeat(np.arange(len(faces)), faces.shape[1])
@@ -974,7 +954,7 @@ class Vertices(Points):
 
         The vertex normal is the average of the normals of the faces incident to the vertex weighted by area.
         """
-        faces = self._mesh.faces
+        faces = self.parent.faces
         # since we are about to unitize next we can simply multiply by area
         vertex_normals = self.incidence_matrix @ (faces.normals * faces.double_areas[:, None])
         return unitize(vertex_normals)
@@ -989,7 +969,7 @@ class Vertices(Points):
         >>> m = ico_sphere()
         >>> assert np.allclose(m.vertices.areas.sum(), m.area)
         """
-        return self.incidence_matrix @ self._mesh.faces.areas / 3
+        return self.incidence_matrix @ self.parent.faces.areas / 3
 
     @cached_attribute
     def voronoi_areas(self) -> np.ndarray:
@@ -1001,7 +981,7 @@ class Vertices(Points):
         >>> m = ico_sphere()
         >>> assert np.allclose(m.vertices.voronoi_areas.sum(), m.area)
         """
-        faces = self._mesh.faces
+        faces = self.parent.faces
         return np.bincount(faces.ravel(), weights=faces.voronoi_areas.ravel(), minlength=len(self))
 
     @cached_attribute
@@ -1034,7 +1014,7 @@ class Vertices(Points):
     @cached_attribute
     def boundaries(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each vertex is on a boundary."""
-        edges = self._mesh.edges
+        edges = self.parent.edges
         # count the number of times each vertex appears in a boundary edge
         return np.bincount(edges[edges.boundaries].ravel(), minlength=len(self)).astype(bool)
 
@@ -1045,7 +1025,7 @@ class Vertices(Points):
         The angle defect is the difference of the sum of adjacent face angles from 2π.
         On a topological sphere, the sum of the angle defects of all vertices is 4π.
         """
-        faces = self._mesh.faces
+        faces = self.parent.faces
         # sum the internal angles of each face for each vertex
         summed_angles = np.bincount(faces.ravel(), weights=faces.internal_angles.ravel())
         defects = 2 * np.pi - summed_angles
@@ -1054,35 +1034,28 @@ class Vertices(Points):
         return defects
 
 
-class Faces(TrackedArray):
-    def __new__(
-        cls,
-        faces: ArrayLike | None = None,
-        mesh: TriangleMesh | None = None,
-        attributes: dict | None = None,
-    ):
-        if faces is None:
-            faces = np.empty((0, 3), dtype=np.int32)
-        self = super().__new__(cls, faces, dtype=np.int32)
-        self._mesh = mesh # type: ignore
-        if self.shape[1] != 3:
-            raise ValueError("Faces must be triangles.")
-        self._attributes = AttributeCache(attributes) # type: ignore
-        return self
+# class Faces(TrackedArray):
+#     def __new__(
+#         cls,
+#         faces: ArrayLike | None = None,
+#         mesh: TriangleMesh | None = None,
+#         attributes: dict | None = None,
+#     ):
+#         if faces is None:
+#             faces = np.empty((0, 3), dtype=np.int32)
+#         self = super().__new__(cls, faces, dtype=np.int32)
+#         self._mesh = mesh # type: ignore
+#         if self.shape[1] != 3:
+#             raise ValueError("Faces must be triangles.")
+#         self._attributes = AttributeCache(attributes) # type: ignore
+#         return self
 
-    @property
-    def mesh(self) -> TriangleMesh | None:
-        """`TriangleMesh` : Parent mesh of this object."""
-        return getattr(self, "_mesh", None)
-    
-    def __getitem__(self, key):
-        result = super().__getitem__(key)
-        if isinstance(result, type(self)):
-            # result._attributes = self._attributes.slice(key)
-            attributes = getattr(self, "_attributes", None)
-            if attributes is not None:
-                result._attributes = attributes.slice(key)
-        return result
+    # @property
+    # def mesh(self) -> TriangleMesh | None:
+    #     """`TriangleMesh` : Parent mesh of this object."""
+    #     return getattr(self, "_mesh", None)
+
+class Faces(ArrayLikeObject):
 
     @cached_attribute
     def colors(self):
@@ -1108,7 +1081,7 @@ class Faces(TrackedArray):
     @cached_attribute
     def corners(self):
         """`ndarray (n, 3, 3)` : Coordinates of each corner for each face."""
-        return self._mesh.vertices.view(np.ndarray)[self]
+        return self.parent.vertices.view(np.ndarray)[self]
 
     @cached_attribute
     def internal_angles(self):
@@ -1147,7 +1120,7 @@ class Faces(TrackedArray):
     def double_areas(self) -> np.ndarray:
         """`ndarray (n,)` : Double area of each face."""
         crossed = self.cross_products
-        if self._mesh.dim == 2:
+        if self.parent.dim == 2:
             crossed = np.expand_dims(crossed, axis=1)
         return norm(crossed, axis=1)
 
@@ -1197,7 +1170,7 @@ class Faces(TrackedArray):
     @cached_attribute
     def normals(self):
         """`ndarray (n, 3)` : Unit normal vector of each face."""
-        if self._mesh.dim == 2:
+        if self.parent.dim == 2:
             raise NotImplementedError("implement for 2D meshes?")
         with np.errstate(divide="ignore", invalid="ignore"):
             normals = (self.cross_products / self.double_areas[:, None]).view(np.ndarray)
@@ -1207,7 +1180,7 @@ class Faces(TrackedArray):
     @cached_attribute
     def boundaries(self):
         """`ndarray (n,)` : Whether each face has any boundary edges."""
-        edges = self._mesh.edges
+        edges = self.parent.edges
         return np.isin(self, edges[edges.boundaries]).any(axis=1)
 
     @cached_attribute
@@ -1285,16 +1258,16 @@ class Edges(TrackedArray):
         if edges is None:
             edges = np.empty((0, 2), dtype=np.int32)
         self = super().__new__(cls, edges, dtype=np.int32)
-        self._mesh = mesh
+        self.parent = mesh
         return self
     
     @cached_property
-    def _mesh(self) -> TriangleMesh:
+    def parent(self) -> TriangleMesh:
         raise AttributeError("Not attached to a mesh.")
 
     def __array_finalize__(self, obj):
         if obj is None: return
-        self._mesh = getattr(obj, '_mesh', None)
+        self.parent = getattr(obj, 'parent', None)
 
     @classmethod
     def from_halfedges(
@@ -1316,7 +1289,7 @@ class Edges(TrackedArray):
     @cached_attribute
     def lengths(self):
         """(n_edges,) array of edge lengths."""
-        return norm(self._mesh.vertices[self[:, 0]] - self._mesh.vertices[self[:, 1]], axis=1)
+        return norm(self.parent.vertices[self[:, 0]] - self.parent.vertices[self[:, 1]], axis=1)
 
     @cached_attribute
     def lengths_squared(self):
@@ -1326,7 +1299,7 @@ class Edges(TrackedArray):
     @cached_attribute
     def midpoints(self):
         """`Points` of the midpoints of each edge."""
-        return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
+        return Points((self.parent.vertices[self[:, 0]] + self.parent.vertices[self[:, 1]]) / 2)
 
 
 

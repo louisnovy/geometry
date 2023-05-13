@@ -5,31 +5,31 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .array import TrackedArray
-from .base import Geometry
+from .base import Geometry, ArrayLikeObject
 from .bounds import AABB
 from .utils import unique_rows
 from .cache import AttributeCache, cached_attribute
 
-class Points(TrackedArray, Geometry):
-    """A collection of points in n-dimensional space."""
-    def __new__(
-        cls,
-        points: ArrayLike,
-        attributes: dict | None = None,
-        **kwargs,
-    ) -> Points:
-        self = super().__new__(cls, points, **kwargs)
-        if self.ndim != 2:
-            raise ValueError(f"Points array must be 2D, got {self.ndim}D")
-        self._attributes = AttributeCache(attributes)
-        return self
-    
-    def __getitem__(self, key):
-        result = super().__getitem__(key)
-        if isinstance(result, type(self)):
-            result._attributes = self._attributes.slice(key)
-        return result
+# class Points(TrackedArray, Geometry):
+#     """A collection of points in n-dimensional space."""
+#     def __new__(
+#         cls,
+#         points: ArrayLike,
+#         attributes: dict | None = None,
+#         **kwargs,
+#     ) -> Points:
+#         self = super().__new__(cls, points, **kwargs)
+#         if self.ndim != 2:
+#             raise ValueError(f"Points array must be 2D, got {self.ndim}D")
+#         self._attributes = AttributeCache(attributes)
+#         return self
 
+class Points(ArrayLikeObject):
+    """A collection of points in n-dimensional space."""
+    def __post_init__(self):
+        if self.data.ndim != 2:
+            raise ValueError(f"Points array must be 2D, got {self.data.ndim}D")
+    
     @classmethod
     def empty(cls, dim: int, dtype=None):
         return cls(np.empty((0, dim), dtype=dtype))
@@ -50,11 +50,11 @@ class Points(TrackedArray, Geometry):
 
     @property
     def dim(self):
-        return self.shape[1]
+        return self.data.shape[1]
 
     @property
     def aabb(self) -> AABB:
-        return AABB(self.min(axis=0), self.max(axis=0))
+        return AABB(self.data.min(axis=0), self.data.max(axis=0))
 
     @property
     def obb(self):
@@ -63,7 +63,7 @@ class Points(TrackedArray, Geometry):
     @property
     def is_planar(self):
         """`True` if all points are coplanar."""
-        singular_values = np.linalg.svd(self - self.mean(axis=0), compute_uv=False, full_matrices=False)
+        singular_values = np.linalg.svd(self - self.data.mean(axis=0), compute_uv=False, full_matrices=False)
         return np.allclose(singular_values[2], 0, atol=1e-6) # TODO: tolerance should be configurable
 
     @property
@@ -88,18 +88,18 @@ class Points(TrackedArray, Geometry):
         if self.dim in (2, 3):
             scatter = go.Scatter3d if self.dim == 3 else go.Scatter
             args = dict(
-                x=self[:, 0],
-                y=self[:, 1],
+                x=self.data[:, 0],
+                y=self.data[:, 1],
                 marker=dict(size=2, color=self.colors if self.colors is not None else None),
                 text=idx,
                 mode="markers" if not connect else "lines",
                 **kwargs,
             )
             if self.dim == 3:
-                args["z"] = self[:, 2]
+                args["z"] = self.data[:, 2]
             fig.add_trace(scatter(**args))
         elif self.dim == 1:
-            fig.add_trace(go.Bar(x=self[:, 1], text=idx, **kwargs))
+            fig.add_trace(go.Bar(x=self.data[:, 1], text=idx, **kwargs))
 
         fig.update_layout(scene_aspectmode="data")
         
