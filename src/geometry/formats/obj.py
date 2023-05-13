@@ -5,7 +5,7 @@ from ..utils import polygons_to_triangles
 
 extensions = [".obj"]
 
-def save(path: str, mesh):
+def save(mesh, path: str):
     with open(path, "w") as f:
         colors = mesh.vertices.colors
         if colors is not None:
@@ -34,7 +34,6 @@ def load(path: str):
             elif line.startswith("f "):
                 faces.append(line.split()[1:])
 
-    # convert faces from sets of / delimited indices to sets of space delimited indices
     if any("/" in face for face in faces):
         faces = [[x.split("/")[0] for x in face] for face in faces]
     
@@ -43,10 +42,8 @@ def load(path: str):
     vertices = np.array(vertices, dtype=float)
     faces = np.array(faces, dtype=int) - 1
 
-    # if colors:
-    #     return mesh.TriangleMesh(vertices, faces, vertex_colors=np.array(colors, dtype=float))
+    vertex_attributes = dict(colors=np.array(colors, dtype=float)) if colors else None
 
-    # return mesh.TriangleMesh(vertices, faces)
+    return mesh.TriangleMesh(vertices, faces, vertex_attributes=vertex_attributes)
 
-    return vertices, faces
 

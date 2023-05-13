@@ -103,4 +103,3 @@ class Colors(TrackedArray):
     
     def normalize(self) -> Colors:
         return ((self - self.min()) / (self.max() - self.min())).view(Colors)
-    

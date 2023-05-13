@@ -16,8 +16,8 @@ from ..bounds import AABB
 from ..utils import unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
 from ..array import TrackedArray
+from ..cache import AttributeCache, cached_attribute
 
-property = cached_property # TODO: custom property decorator for caching cleanly
 
 class TriangleMesh(Geometry):
     __slots__ = ("_vertices", "_faces")
@@ -26,9 +26,13 @@ class TriangleMesh(Geometry):
         self,
         vertices: ArrayLike | None = None,
         faces: ArrayLike | None = None,
+        attributes: dict | None = None,
+        vertex_attributes: dict | None = None,
+        face_attributes: dict | None = None,
     ):
-        self._vertices: Vertices = Vertices(vertices, mesh=self)
-        self._faces: Faces = Faces(faces, mesh=self)
+        self._vertices: Vertices = Vertices(vertices, mesh=self, attributes=vertex_attributes)
+        self._faces: Faces = Faces(faces, mesh=self, attributes=face_attributes)
+        self._attributes = AttributeCache(attributes)
 
     @classmethod
     def empty(cls, dim: int, dtype=None):
@@ -45,7 +49,7 @@ class TriangleMesh(Geometry):
         format : str, optional
             File format to use. If not specified, will be inferred from the file extension.
         kwargs
-            Additional keyword arguments to pass to the loader. See `formats` for details.
+            Additional keyword arguments to pass to the loader. See `geometry.formats` for details.
 
         Returns
         -------
@@ -55,12 +59,13 @@ class TriangleMesh(Geometry):
         return load(path, format=format, **kwargs)
     
     def save(self, path: str, format: str | None = None, **kwargs):
-        """Save a mesh to a file.
+        """Save a TriangleMesh to a file.
 
         Parameters
         ----------
         path : str
             Path to the file to save.
+
         format : str, optional
             File format to use. If not specified, will be inferred from the file extension.
         kwargs
@@ -70,11 +75,6 @@ class TriangleMesh(Geometry):
 
     # *** Basic properties ***
 
-    @property
-    def dim(self):
-        """`int` : Number of dimensions of the mesh."""
-        return self.vertices.dim
-    
     @property
     def vertices(self) -> Vertices:
         """`Vertices` : Vertices of the mesh."""
@@ -94,23 +94,41 @@ class TriangleMesh(Geometry):
     def n_faces(self) -> int:
         """`int` : Number of `Faces` in the mesh."""
         return len(self.faces)
+    
+    @cached_property
+    def _edge_maps(self):
+        # return bindings.unique_edge_map(self.faces)
+        halfedges, edges, edge_map, cumulative_edge_counts, unique_edge_map = bindings.unique_edge_map(self.faces)
+        counts = np.diff(cumulative_edge_counts)
+        return halfedges, edges, edge_map, counts, unique_edge_map
 
     @property
     def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
-        # TODO: convention?
-        # return self.faces.view(np.ndarray)[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 3, 2)
-        return self.faces.view(np.ndarray)[:, [1, 2, 2, 0, 0, 1]].reshape(-1, 3, 2)
+        return self._edge_maps[0]
+    
+    @property
+    def n_halfedges(self) -> int:
+        """`int` : Number of `Halfedges` in the mesh."""
+        return len(self.halfedges)
 
     @property
     def edges(self) -> Edges:
         """`Edges` : Edges of the mesh."""
-        return Edges.from_halfedges(self.halfedges, mesh=self)
-
+        edges = Edges(self.halfedges[self._edge_maps[1]], mesh=self)
+        edges.valences = self._edge_maps[3]
+        edges.boundaries = edges.valences == 1
+        return edges
+                     
     @property
     def n_edges(self) -> int:
         """`int` : Number of `Edges` in the mesh."""
         return len(self.edges)
+    
+    @property
+    def dim(self):
+        """`int` : Number of dimensions of the mesh."""
+        return self.vertices.dim
 
     @property
     def euler_characteristic(self) -> int:
@@ -129,7 +147,7 @@ class TriangleMesh(Geometry):
         return (2 - self.euler_characteristic) // 2
 
     @property
-    def area(self) -> np.ndarray:
+    def area(self) -> float:
         """`float` : Total surface area of the mesh."""
         return self.faces.areas.sum()
 
@@ -137,13 +155,13 @@ class TriangleMesh(Geometry):
     def volume(self) -> float:
         """`float` : Signed volume of the mesh.
 
-        A mesh with more faces oriented outward than inward will have a positive volume.
+        A mesh with more face area oriented outward than inward will have a positive volume.
         """
         a, b, c = np.rollaxis(self.faces.corners, 1)
         return np.sum(a * np.cross(b, c)) / 6
 
     @property
-    def centroid(self):
+    def centroid(self) -> np.ndarray:
         """`ndarray` : Centroid of the mesh.
 
         The centroid is computed from the mean of face centroids weighted by their area.
@@ -209,7 +227,7 @@ class TriangleMesh(Geometry):
     # *** Point queries ***
 
     def winding_number(self, queries: ArrayLike) -> np.ndarray:
-        """Compute the generalized winding number of each query point with respect to the mesh.
+        """Compute the winding number at each query point with respect to the mesh.
 
         Parameters
         ----------
@@ -219,10 +237,10 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `ndarray (n_queries,)`
-            Generalized winding number of each query point.
+            Winding number at each query point.        
         """
         queries = np.asanyarray(queries, dtype=np.float64)
-        return bindings.generalized_winding_number(self.vertices, self.faces, queries)
+        return bindings.fast_winding_number(self.vertices, self.faces, queries)
 
     def contains(self, queries: ArrayLike) -> np.ndarray:
         """Check if each query point is inside the mesh.
@@ -245,7 +263,7 @@ class TriangleMesh(Geometry):
         squared=False,
         signed=False,
         return_index=False,
-        return_closest=False
+        return_closest=False,
     ):
         """Compute the distance from each query point to closest point on the surface of the mesh.
 
@@ -258,14 +276,17 @@ class TriangleMesh(Geometry):
         signed : `bool`, optional
             If True, distances inside the mesh will be negative.
         return_face_index : `bool`, optional
-            If True, return the index of the closest face for each query point.
+            If True, also return the index of the closest face for each query point.
         return_closest : `bool`, optional
-            If True, return the closest point on the surface of the mesh for each query point.
+            If True, also return the closest point on the surface of the mesh for each query point.
 
         Returns
         -------
         `ndarray (n_queries,)`
             Distance from each query point to the surface of the mesh.
+
+        Optionally returns:
+
         `ndarray (n_queries,)` (optional)
             Index of the closest face for each query point.
         `Points (n_queries,)` (optional)
@@ -274,18 +295,24 @@ class TriangleMesh(Geometry):
         queries = np.asanyarray(queries, dtype=np.float64)
         sqdists, indices, closest = bindings.point_mesh_squared_distance(queries, self.vertices, self.faces)
 
-        if not squared:
-            sqdists = np.sqrt(sqdists)
+        if squared:
+            dists = sqdists
+        else:
+            dists = np.sqrt(sqdists)
         
         if signed:
-            sqdists[self.contains(queries)] *= -1
+            dists[self.contains(queries)] *= -1
 
-        out = (sqdists,)
         if any([return_index, return_closest]):
-            if return_index: out += (indices,)
-            if return_closest: out += (Points(closest),) # TODO: attribute propagation
+            out = (dists,)
+            if return_index:
+                out += (indices,)
+            if return_closest:
+                out += (Points(closest),) # TODO: attribute propagation
             return out
-        return out
+
+        return dists
+
     
     def sample_surface(
         self,
@@ -295,7 +322,7 @@ class TriangleMesh(Geometry):
         face_weights = None,
         seed: int | None = None,
     ) -> Points | tuple[Points, np.ndarray]:
-        """Sample points uniformly from the surface of the mesh.
+        """Sample points on the surface of the mesh.
         
         Parameters
         ----------
@@ -331,6 +358,7 @@ class TriangleMesh(Geometry):
                 np.allclose(face_weights.sum(), 1),
             ]):
                 raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
+            
         rng = np.random.default_rng(seed)
         # distribute samples on the simplex
         barycentric = rng.dirichlet(barycentric_weights, size=n_samples)
@@ -338,13 +366,17 @@ class TriangleMesh(Geometry):
         face_indices = np.searchsorted(np.cumsum(face_weights), rng.random(n_samples))
         # map samples on the simplex to each face with a linear combination of the face's corners
         samples = np.einsum("ij,ijk->ik", barycentric, self.faces.corners[face_indices])
-
-        return (samples, face_indices) if return_index else samples
+        if self.vertices.colors is not None:
+            colors = np.einsum("ij,ijk->ik", barycentric, self.vertices.colors[self.faces[face_indices]])
+        else:
+            colors = None
+        points = Points(samples, attributes=dict(colors=colors))
+        return (points, face_indices) if return_index else points
     
     # *** Transformations ***
 
     def transform(self, matrix: ArrayLike) -> TriangleMesh:
-        """Transform the mesh by the given matrix.
+        """Transform the mesh by applying the given transformation matrix to its vertices.
 
         Parameters
         ----------
@@ -361,32 +393,6 @@ class TriangleMesh(Geometry):
             raise ValueError(f"Transformation matrix must have shape {(self.dim + 1, self.dim + 1)}")
         new_vertices = self.vertices @ matrix[:self.dim, :self.dim].T + matrix[:self.dim, self.dim]
         return type(self)(new_vertices, self.faces)
-    
-    def scale(self, factor: float, center: ArrayLike | None = None) -> TriangleMesh:
-        """Scale by the given factor.
-
-        Parameters
-        ----------
-        factor : `float`
-            Scaling factor.
-        center : `ArrayLike` (dim,), optional
-            Center of the scaling operation. The default is the origin.
-
-        Returns
-        -------
-        `TriangleMesh`
-            Scaled mesh.
-        """
-        mat = np.eye(self.dim + 1, dtype=np.float64)
-        mat[:self.dim, :self.dim] *= factor
-    
-        if center is not None:
-            center = np.asanyarray(center, dtype=np.float64)
-            if center.shape != (self.dim,):
-                raise ValueError(f"Center must have shape {(self.dim,)}")
-            mat[:self.dim, self.dim] = center * (1 - factor)
-    
-        return self.transform(mat)
     
     def translate(self, vector: ArrayLike) -> TriangleMesh:
         """Translate by the given vector.
@@ -406,6 +412,32 @@ class TriangleMesh(Geometry):
             raise ValueError(f"Vector must have shape {(self.dim,)}")
         return type(self)(self.vertices + vector, self.faces)
     
+    def scale(self, factor: float | ArrayLike, center: ArrayLike = (0,0,0)) -> TriangleMesh:
+        """Scale by the given factor.
+
+        Parameters
+        ----------
+        factor : `float` or `ArrayLike` (dim,)
+            Scaling factor.
+        center : `ArrayLike` (dim,), optional
+            Center of the scaling operation. The default is the origin.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Scaled mesh.
+        """
+
+        factor = np.asanyarray(factor, dtype=np.float64)
+        if factor.shape == ():
+            factor = np.full(self.dim, factor, dtype=np.float64)
+
+        center = np.asanyarray(center, dtype=np.float64)
+        if center.shape != (self.dim,):
+            raise ValueError(f"Center does not match mesh dimension {self.dim}")
+
+        return type(self)((self.vertices - center) * factor + center, self.faces)
+
     # TODO: we shouldn't be building the matrix here
     # TODO: support 2d
     def rotate(self, axis: ArrayLike, angle: float, center: ArrayLike | None = None) -> TriangleMesh:
@@ -818,28 +850,85 @@ class TriangleMesh(Geometry):
     def __hash__(self) -> int:
         return hash((self.vertices, self.faces))
     
+    def plot(self, fig=None, show=False, opacity=1, **kwargs):
+        if self.dim == 2:
+            import matplotlib.pyplot as plt
+            ax = plt.gca()
+            ax.set_aspect('equal')
+            triangles = self.faces.corners
+            for triangle in triangles:
+                ax.fill(triangle[:, 0], triangle[:, 1], **kwargs)
+            if show: plt.tight_layout(); plt.show()
+            return ax
+
+        from plotly import graph_objects as go
+        fig = go.Figure() if fig is None else fig
+        m = self
+        fig.add_trace(
+            go.Mesh3d(
+                x=m.vertices[:, 0],
+                y=m.vertices[:, 1],
+                z=m.vertices[:, 2],
+                i=m.faces[:, 0],
+                j=m.faces[:, 1],
+                k=m.faces[:, 2],
+                flatshading=True,
+                opacity=opacity,
+                # lighting=dict(ambient=0.8, diffuse=0.5, fresnel=0.1, specular=0.8, roughness=0.0),
+                facecolor=m.faces.colors,
+                vertexcolor=m.vertices.colors,
+            )
+        )
+        props = {
+            # m.faces.circumcenters: "yellow",
+            # m.faces.incenters: "orange",
+            # m.faces.orthocenters: "purple",
+            # m.faces.centroids: "blue",
+            # m.edges.midpoints: "green"
+        }
+        for prop, color in props.items():
+            fig.add_trace(
+                go.Scatter3d(
+                    x=prop[:, 0],
+                    y=prop[:, 1],
+                    z=prop[:, 2],
+                    mode="markers",
+                    marker=dict(size=2, color=color),
+                )
+            )
+
+        fig.update_layout(scene=dict(aspectmode='data'))
+        fig.show() if show else None
+    
+    def show(self, **kwargs):
+        self.plot(show=True, **kwargs)
+        
+
+    
 
 class Vertices(Points):
     def __new__(
-        cls: Type[Vertices],
-        vertices: ArrayLike | None = None,
-        mesh: TriangleMesh | None = None,
+        cls,
+        vertices: ArrayLike,
+        mesh: TriangleMesh,
+        attributes: dict | None = None,
     ):
         if vertices is None:
             vertices = np.empty((0, 3), dtype=np.float64)
-        self = super().__new__(cls, vertices, dtype=np.float64)
-        self._mesh = mesh
+        self = super().__new__(cls, vertices, attributes, dtype=np.float64)
+        self._mesh = mesh # type: ignore
         return self
 
-    @cached_property
-    def _mesh(self) -> TriangleMesh:
-        raise AttributeError("Not attached to a mesh.")
+    @property
+    def mesh(self) -> TriangleMesh | None:
+        """`TriangleMesh` : Parent mesh of this object."""
+        return getattr(self, "_mesh", None)
 
     def __array_finalize__(self, obj):
         if obj is None: return
         self._mesh = getattr(obj, '_mesh', None)
 
-    @property
+    @cached_attribute
     def adjacency_matrix(self) -> csr_array:
         """`csr_array (n_vertices, n_vertices)` : Vertex adjacency matrix.
 
@@ -851,14 +940,14 @@ class Vertices(Points):
         data = np.ones(len(edges), dtype=bool)
         return csr_array((data, edges.T), shape=(n_vertices, n_vertices))
 
-    @property
+    @cached_attribute
     def adjacency_list(self) -> list[np.ndarray]:
         """`list[np.ndarray]` : Neighboring vertex indices for each vertex."""
         adjacency = self.adjacency_matrix
         # using the list comprehension is much faster than converting to a linked list in this case
         return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
     
-    @property
+    @cached_attribute
     def incidence_matrix(self) -> csr_array:
         """`csr_array (n_vertices, n_faces)` : Vertex incidence matrix.
 
@@ -873,13 +962,13 @@ class Vertices(Points):
         shape = (len(self), len(faces))
         return csr_array((data, (row, col)), shape=shape)
 
-    @property
+    @cached_attribute
     def incidence_list(self) -> list[np.ndarray]:
         """`list[np.ndarray]` : Incident face indices for each vertex."""
         incidence = self.incidence_matrix
         return [incidence.indices[incidence.indptr[i] : incidence.indptr[i + 1]] for i in range(len(self))]
 
-    @property
+    @cached_attribute
     def normals(self) -> np.ndarray:
         """`ndarray (n, 3)` : Unitized vertex normals.
 
@@ -890,7 +979,7 @@ class Vertices(Points):
         vertex_normals = self.incidence_matrix @ (faces.normals * faces.double_areas[:, None])
         return unitize(vertex_normals)
 
-    @property
+    @cached_attribute
     def areas(self) -> np.ndarray:
         """`ndarray (n,)` : Lumped areas for each vertex.
         
@@ -902,7 +991,7 @@ class Vertices(Points):
         """
         return self.incidence_matrix @ self._mesh.faces.areas / 3
 
-    @property
+    @cached_attribute
     def voronoi_areas(self) -> np.ndarray:
         """`ndarray (n,)` : Areas of the voronoi cells around each vertex.
         
@@ -915,7 +1004,7 @@ class Vertices(Points):
         faces = self._mesh.faces
         return np.bincount(faces.ravel(), weights=faces.voronoi_areas.ravel(), minlength=len(self))
 
-    @property
+    @cached_attribute
     def valences(self) -> np.ndarray:
         """`ndarray (n,)` : Valence of each vertex.
 
@@ -937,19 +1026,19 @@ class Vertices(Points):
         """
         return self.adjacency_matrix.sum(axis=0)
 
-    @property
+    @cached_attribute
     def referenced(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each vertex is part of a face."""
         return self.valences > 0
 
-    @property
+    @cached_attribute
     def boundaries(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each vertex is on a boundary."""
         edges = self._mesh.edges
         # count the number of times each vertex appears in a boundary edge
         return np.bincount(edges[edges.boundaries].ravel(), minlength=len(self)).astype(bool)
 
-    @property
+    @cached_attribute
     def angle_defects(self) -> np.ndarray:
         """`ndarray (n,)` : Angle defect at each vertex.
         
@@ -967,27 +1056,39 @@ class Vertices(Points):
 
 class Faces(TrackedArray):
     def __new__(
-        cls: Type[Faces],
+        cls,
         faces: ArrayLike | None = None,
         mesh: TriangleMesh | None = None,
+        attributes: dict | None = None,
     ):
         if faces is None:
             faces = np.empty((0, 3), dtype=np.int32)
         self = super().__new__(cls, faces, dtype=np.int32)
-        self._mesh = mesh
+        self._mesh = mesh # type: ignore
         if self.shape[1] != 3:
             raise ValueError("Faces must be triangles.")
+        self._attributes = AttributeCache(attributes) # type: ignore
         return self
 
-    @cached_property
-    def _mesh(self) -> TriangleMesh:
-        raise AttributeError("Not attached to a mesh.")
-
-    def __array_finalize__(self, obj):
-        if obj is None: return
-        self._mesh = getattr(obj, '_mesh', None)
-
     @property
+    def mesh(self) -> TriangleMesh | None:
+        """`TriangleMesh` : Parent mesh of this object."""
+        return getattr(self, "_mesh", None)
+    
+    def __getitem__(self, key):
+        result = super().__getitem__(key)
+        if isinstance(result, type(self)):
+            # result._attributes = self._attributes.slice(key)
+            attributes = getattr(self, "_attributes", None)
+            if attributes is not None:
+                result._attributes = attributes.slice(key)
+        return result
+
+    @cached_attribute
+    def colors(self):
+        return None
+    
+    @cached_attribute
     def adjacency_matrix(self) -> csr_array:
         """`csr_array (n_faces, n_faces)` : Face adjacency matrix.
 
@@ -998,18 +1099,18 @@ class Faces(TrackedArray):
         # this should actually speed things up a bit
         return bindings.facet_adjacency_matrix(self)
 
-    @property
+    @cached_attribute
     def adjacency_list(self) -> list[np.ndarray]:
         """`list[ndarray]` : Neighboring face indices for each face."""
         adjacency = self.adjacency_matrix
         return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
 
-    @property
+    @cached_attribute
     def corners(self):
         """`ndarray (n, 3, 3)` : Coordinates of each corner for each face."""
         return self._mesh.vertices.view(np.ndarray)[self]
 
-    @property
+    @cached_attribute
     def internal_angles(self):
         """`ndarray (n, 3)` : Internal angles of each face."""
         a, b, c = np.rollaxis(self.corners, 1)
@@ -1023,7 +1124,7 @@ class Faces(TrackedArray):
         res[:, 2] = np.pi - res[:, 0] - res[:, 1]
         return res
     
-    @property
+    @cached_attribute
     def cotangents(self):
         """`ndarray (n, 3)` : Cotangents of each internal angle."""
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1031,18 +1132,18 @@ class Faces(TrackedArray):
         cot[~np.isfinite(cot)] = 0
         return cot
 
-    @property
+    @cached_attribute
     def centroids(self) -> Points:
         """`Points (n, 3)` : Centroid of each face."""
         return Points(self.corners.mean(axis=1))
 
-    @property
+    @cached_attribute
     def cross_products(self) -> np.ndarray:
         """`ndarray (n, 3)` : Cross product of each face."""
         v0, v1, v2 = np.rollaxis(self.corners, 1)
         return np.cross(v1 - v0, v2 - v0)
 
-    @property
+    @cached_attribute
     def double_areas(self) -> np.ndarray:
         """`ndarray (n,)` : Double area of each face."""
         crossed = self.cross_products
@@ -1050,12 +1151,12 @@ class Faces(TrackedArray):
             crossed = np.expand_dims(crossed, axis=1)
         return norm(crossed, axis=1)
 
-    @property
+    @cached_attribute
     def areas(self) -> np.ndarray:
         """`ndarray (n,)` : Area of each face."""
         return self.double_areas / 2
 
-    @property
+    @cached_attribute
     def voronoi_areas(self) -> np.ndarray:
         """`ndarray (n, 3)` : Voronoi area of each corner of each face."""
         v0, v1, v2 = np.rollaxis(self.corners, 1)
@@ -1087,13 +1188,13 @@ class Faces(TrackedArray):
         voronoi_areas[self.degenerated] = 0.0
         return voronoi_areas
 
-    @property
+    @cached_attribute
     def degenerated(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is degenerated (has zero area).
         This can happen if two vertices are the same, or if all three vertices are colinear."""
         return self.double_areas == 0
 
-    @property
+    @cached_attribute
     def normals(self):
         """`ndarray (n, 3)` : Unit normal vector of each face."""
         if self._mesh.dim == 2:
@@ -1103,61 +1204,61 @@ class Faces(TrackedArray):
         normals[np.isnan(normals)] = 0
         return normals
 
-    @property
+    @cached_attribute
     def boundaries(self):
         """`ndarray (n,)` : Whether each face has any boundary edges."""
         edges = self._mesh.edges
         return np.isin(self, edges[edges.boundaries]).any(axis=1)
 
-    @property
+    @cached_attribute
     def edge_lengths(self) -> np.ndarray:
         """`ndarray (n, 3)` : Length of each edge of each face."""
         v0, v1, v2 = np.rollaxis(self.corners, 1)
         return np.array([norm(v1 - v0, axis=1), norm(v2 - v1, axis=1), norm(v0 - v2, axis=1)]).T
 
-    @property
+    @cached_attribute
     def edge_lengths_squared(self) -> np.ndarray:
         """`ndarray (n, 3)` : Squared length of each edge of each face."""
         a, b, c = self.edge_lengths.T
         return np.array([a**2, b**2, c**2]).T
 
-    @property
+    @cached_attribute
     def obtuse(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is an obtuse triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
         return (a2 > b2 + c2) | (b2 > a2 + c2) | (c2 > a2 + b2) & ~self.right
 
-    @property
+    @cached_attribute
     def acute(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is an acute triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
         return (a2 < b2 + c2) & (b2 < a2 + c2) & (c2 < a2 + b2) & ~self.right
 
-    @property
+    @cached_attribute
     def right(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is a right triangle."""
         a2, b2, c2 = self.edge_lengths_squared.T
         return isclose(a2, b2 + c2) | isclose(b2, a2 + c2) | isclose(c2, a2 + b2)
 
-    @property
+    @cached_attribute
     def equilateral(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is an equilateral triangle."""
         a, b, c = self.edge_lengths.T
         return isclose(a, b) & isclose(b, c)
 
-    @property
+    @cached_attribute
     def isosceles(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is an isosceles triangle."""
         a, b, c = self.edge_lengths.T
         return isclose(a, b) | isclose(b, c) | isclose(c, a)
 
-    @property
+    @cached_attribute
     def scalene(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is a scalene triangle."""
         a, b, c = self.edge_lengths.T
         return ~isclose(a, b) & ~isclose(b, c) & ~isclose(c, a)
     
-    @property
+    @cached_attribute
     def circumradii(self) -> np.ndarray:
         """`ndarray (n,)` : Radius of the circumcircle of each face."""
         a, b, c = self.edge_lengths.T
@@ -1166,7 +1267,7 @@ class Faces(TrackedArray):
         r[np.isnan(r)] = 0
         return r
     
-    @property
+    @cached_attribute
     def inradii(self) -> np.ndarray:
         """`ndarray (n,)` : Radius of the incircle of each face."""
         a, b, c = self.edge_lengths.T
@@ -1212,17 +1313,17 @@ class Edges(TrackedArray):
         if self.shape[1] != 2:
             raise ValueError("Edges must be an (n, 2) array")
 
-    @property
+    @cached_attribute
     def lengths(self):
         """(n_edges,) array of edge lengths."""
         return norm(self._mesh.vertices[self[:, 0]] - self._mesh.vertices[self[:, 1]], axis=1)
 
-    @property
+    @cached_attribute
     def lengths_squared(self):
         """(n_edges,) array of squared edge lengths."""
         return self.lengths**2
 
-    @property
+    @cached_attribute
     def midpoints(self):
         """`Points` of the midpoints of each edge."""
         return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)

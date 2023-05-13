@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
+from .. import mesh
 
 extensions = [".off"]
 
 
-def save(path: str, vertices: np.ndarray, faces: np.ndarray):
+def save(mesh, path: str):
+    vertices = mesh.vertices
+    faces = mesh.faces
     with open(path, "w") as f:
         f.write("OFF\n")
         f.write(f"{len(vertices)} {len(faces)} 0\n")
@@ -21,4 +24,4 @@ def load(path: str):
         num_vertices, num_faces, _ = [int(x) for x in f.readline().split()]
         vertices = np.loadtxt(f, max_rows=num_vertices, dtype=np.float32)
         faces = np.loadtxt(f, max_rows=num_faces, dtype=np.uint32)[:, 1:]
-        return vertices, faces
+    return mesh.TriangleMesh(vertices, faces)

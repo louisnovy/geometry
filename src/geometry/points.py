@@ -8,18 +8,27 @@ from .array import TrackedArray
 from .base import Geometry
 from .bounds import AABB
 from .utils import unique_rows
+from .cache import AttributeCache, cached_attribute
 
 class Points(TrackedArray, Geometry):
     """A collection of points in n-dimensional space."""
     def __new__(
         cls,
         points: ArrayLike,
+        attributes: dict | None = None,
         **kwargs,
-    ):
-        obj = super().__new__(cls, points, **kwargs)
-        if obj.ndim != 2:
-            raise ValueError(f"Points array must be 2D, got {obj.ndim}D")
-        return obj
+    ) -> Points:
+        self = super().__new__(cls, points, **kwargs)
+        if self.ndim != 2:
+            raise ValueError(f"Points array must be 2D, got {self.ndim}D")
+        self._attributes = AttributeCache(attributes)
+        return self
+    
+    def __getitem__(self, key):
+        result = super().__getitem__(key)
+        if isinstance(result, type(self)):
+            result._attributes = self._attributes.slice(key)
+        return result
 
     @classmethod
     def empty(cls, dim: int, dtype=None):
@@ -31,6 +40,13 @@ class Points(TrackedArray, Geometry):
     
     def save(self, path: str):
         raise NotImplementedError
+    
+    @cached_attribute
+    def colors(self):
+        """`Colors` associated with each point.
+        Defaults to `None` if colors were not provided.
+        """
+        return None
 
     @property
     def dim(self):
@@ -53,6 +69,44 @@ class Points(TrackedArray, Geometry):
     @property
     def kdtree(self) -> cKDTree:
         return cKDTree(self)
+    
+    def downsample(self, epsilon: float, method: str = "poisson") -> Points:
+        """Downsample the point cloud using the specified method."""
+        if method == "poisson":
+            return downsample_poisson(self, epsilon)
+        elif method == "grid":
+            return downsample_grid(self, epsilon)
+        else:
+            raise ValueError(f"Unknown downsampling method: {method}")
+    
+    def plot(self, fig=None, show=False, connect=False, **kwargs):
+        from plotly import graph_objects as go
+
+        fig = go.Figure() if fig is None else fig
+
+        idx = np.arange(len(self))
+        if self.dim in (2, 3):
+            scatter = go.Scatter3d if self.dim == 3 else go.Scatter
+            args = dict(
+                x=self[:, 0],
+                y=self[:, 1],
+                marker=dict(size=2, color=self.colors if self.colors is not None else None),
+                text=idx,
+                mode="markers" if not connect else "lines",
+                **kwargs,
+            )
+            if self.dim == 3:
+                args["z"] = self[:, 2]
+            fig.add_trace(scatter(**args))
+        elif self.dim == 1:
+            fig.add_trace(go.Bar(x=self[:, 1], text=idx, **kwargs))
+
+        fig.update_layout(scene_aspectmode="data")
+        
+        fig.show() if show else None
+
+    def show(self, **kwargs):
+        self.plot(show=True, **kwargs)
 
 
 def downsample_poisson(points: Points, radius: float) -> Points:
@@ -87,4 +141,4 @@ def downsample_grid(points: Points, pitch: float) -> Points:
     # find first index of each
     unique_idx = unique_rows(bins, return_index=True)[1]
     # transform to centers of grid cells
-    return Points(points.aabb.min + (bins[unique_idx] + 0.5) * pitch)
+    return (bins[unique_idx] + 0.5) * pitch + points.aabb.min

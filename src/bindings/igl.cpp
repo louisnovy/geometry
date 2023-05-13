@@ -1,3 +1,4 @@
+#include <igl/collapse_small_triangles.h>
 #include <igl/copyleft/cgal/RemeshSelfIntersectionsParam.h>
 #include <igl/copyleft/cgal/convex_hull.h>
 #include <igl/copyleft/cgal/fast_winding_number.h>
@@ -12,7 +13,6 @@
 #include <igl/point_mesh_squared_distance.h>
 #include <igl/unique_edge_map.h>
 #include <igl/winding_number.h>
-#include <igl/collapse_small_triangles.h>
 #include <pybind11/eigen.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -50,6 +50,7 @@ igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
 bool is_single_point(Eigen::MatrixXd &points) { return points.rows() == 1; }
 
 void igl_bindings(py::module &m) {
+
   m.def("mesh_boolean", [](EigenDRef<MatrixXd> verticesA_in,
                            EigenDRef<MatrixXi> facesA_in,
                            EigenDRef<MatrixXd> verticesB_in,
@@ -83,7 +84,7 @@ void igl_bindings(py::module &m) {
   });
 
   m.def("outer_hull", [](EigenDRef<MatrixXd> vertices_in,
-                              EigenDRef<MatrixXi> faces_in) {
+                         EigenDRef<MatrixXi> faces_in) {
     Eigen::MatrixXd vertices(vertices_in);
     Eigen::MatrixXi faces(faces_in);
     Eigen::MatrixXd vertices_out;
@@ -210,26 +211,39 @@ void igl_bindings(py::module &m) {
     return A;
   });
 
+  // m.def("unique_edge_map", [](EigenDRef<MatrixXi> faces_in) {
+  //   Eigen::MatrixXi faces(faces_in);
+  //   Eigen::MatrixXi directed_edges;
+  //   Eigen::VectorXi unique_undirected_edges;
+  //   Eigen::VectorXi edge_map;
+  //   std::vector<std::vector<typename Eigen::MatrixXi::Index>>
+  //       unique_edge_to_edge_map;
+  //   igl::unique_edge_map(faces, directed_edges, unique_undirected_edges,
+  //                        edge_map, unique_edge_to_edge_map);
+  //   return std::make_tuple(directed_edges, unique_undirected_edges, edge_map,
+  //                          unique_edge_to_edge_map);
+  // });
   m.def("unique_edge_map", [](EigenDRef<MatrixXi> faces_in) {
     Eigen::MatrixXi faces(faces_in);
     Eigen::MatrixXi directed_edges;
     Eigen::VectorXi unique_undirected_edges;
     Eigen::VectorXi edge_map;
-    std::vector<std::vector<typename Eigen::MatrixXi::Index>>
-        unique_edge_to_edge_map;
+    Eigen::VectorXi cumulative_unique_edge_counts;
+    Eigen::VectorXi unique_edge_map;
     igl::unique_edge_map(faces, directed_edges, unique_undirected_edges,
-                         edge_map, unique_edge_to_edge_map);
+                         edge_map, cumulative_unique_edge_counts,
+                         unique_edge_map);
     return std::make_tuple(directed_edges, unique_undirected_edges, edge_map,
-                           unique_edge_to_edge_map);
+                           cumulative_unique_edge_counts, unique_edge_map);
   });
 
-  m.def("collapse_small_triangles", [](EigenDRef<MatrixXd> vertices_in,
-                                       EigenDRef<MatrixXi> faces_in,
-                                       double epsilon) {
-    Eigen::MatrixXd vertices(vertices_in);
-    Eigen::MatrixXi faces(faces_in);
-    Eigen::MatrixXi faces_out;
-    igl::collapse_small_triangles(vertices, faces, epsilon, faces_out);
-    return faces_out;
-  });
+  m.def("collapse_small_triangles",
+        [](EigenDRef<MatrixXd> vertices_in, EigenDRef<MatrixXi> faces_in,
+           double epsilon) {
+          Eigen::MatrixXd vertices(vertices_in);
+          Eigen::MatrixXi faces(faces_in);
+          Eigen::MatrixXi faces_out;
+          igl::collapse_small_triangles(vertices, faces, epsilon, faces_out);
+          return faces_out;
+        });
 }

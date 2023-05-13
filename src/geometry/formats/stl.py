@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 from struct import pack
 from pathlib import Path
+from .. import mesh
 
 extensions = [".stl", ".stla"]
 
@@ -60,11 +61,16 @@ def load(path: str | Path):
     with open(path, "rb") as f:
         ascii = f.read(5) == b"solid"
     if ascii:
-        return load_ascii(path)
-    return load_binary(path)
+        data = load_ascii(path)
+    data = load_binary(path)
+
+    return mesh.TriangleMesh(*data).remove_duplicated_vertices()
 
 
-def save(path: str | Path, vertices, faces, normals=None, ascii=False):
+def save(mesh, path: str | Path, ascii=False):
+    
+    vertices, faces, normals = mesh.vertices, mesh.faces, mesh.normals
+
     path = Path(path)
     if ascii or path.suffix == ".stla":
         save_ascii(path, vertices, faces, normals)
