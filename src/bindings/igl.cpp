@@ -28,25 +28,9 @@ template <typename MatrixType>
 // allows referencing numpy arrays of arbitrary shape without copying
 using EigenDRef = Ref<MatrixType, 0, EigenDStride>;
 
-// TODO: modularize these and split into headers
+// TODO: modularize these and split into headers so we don't have to compile
+// all this every time
 
-// convert string to a valid igl::MeshBooleanType enum
-igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
-  static const std::map<std::string, igl::MeshBooleanType> type_map = {
-      {"resolve", igl::MESH_BOOLEAN_TYPE_RESOLVE},
-      {"union", igl::MESH_BOOLEAN_TYPE_UNION},
-      {"intersection", igl::MESH_BOOLEAN_TYPE_INTERSECT},
-      {"intersect", igl::MESH_BOOLEAN_TYPE_INTERSECT},
-      {"difference", igl::MESH_BOOLEAN_TYPE_MINUS},
-      {"minus", igl::MESH_BOOLEAN_TYPE_MINUS},
-      {"symmetric_difference", igl::MESH_BOOLEAN_TYPE_XOR},
-      {"xor", igl::MESH_BOOLEAN_TYPE_XOR}};
-  auto it = type_map.find(type);
-  if (it == type_map.end()) {
-    throw std::invalid_argument("Invalid mesh boolean type");
-  }
-  return it->second;
-}
 
 class WindingNumberBVH {
 public:
@@ -63,6 +47,7 @@ public:
 private:
   igl::FastWindingNumberBVH fwn_bvh;
 };
+
 
 class AABBTree {
 public:
@@ -102,6 +87,25 @@ private:
   igl::AABB<Eigen::MatrixXd, 2> tree2d;
   igl::AABB<Eigen::MatrixXd, 3> tree3d;
 };
+
+
+// converts a string to a valid igl::MeshBooleanType enum
+igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
+  static const std::map<std::string, igl::MeshBooleanType> type_map = {
+      {"resolve", igl::MESH_BOOLEAN_TYPE_RESOLVE},
+      {"union", igl::MESH_BOOLEAN_TYPE_UNION},
+      {"intersection", igl::MESH_BOOLEAN_TYPE_INTERSECT},
+      {"intersect", igl::MESH_BOOLEAN_TYPE_INTERSECT},
+      {"difference", igl::MESH_BOOLEAN_TYPE_MINUS},
+      {"minus", igl::MESH_BOOLEAN_TYPE_MINUS},
+      {"symmetric_difference", igl::MESH_BOOLEAN_TYPE_XOR},
+      {"xor", igl::MESH_BOOLEAN_TYPE_XOR}};
+  auto it = type_map.find(type);
+  if (it == type_map.end()) {
+    throw std::invalid_argument("Invalid mesh boolean type");
+  }
+  return it->second;
+
 
 void bindings(py::module &m) {
   py::class_<WindingNumberBVH>(m, "WindingNumberBVH")
@@ -151,14 +155,14 @@ void bindings(py::module &m) {
     Eigen::MatrixXd vertices_out;
     Eigen::MatrixXi faces_out;
     Eigen::VectorXi face_indices;
-    Eigen::VectorXi was_face_flipped;
+    Eigen::VectorXi was_face_flipped; // TODO: unsure what this actually is. investigate
     igl::copyleft::cgal::outer_hull(vertices, faces, vertices_out, faces_out,
                                     face_indices, was_face_flipped);
     return std::make_tuple(vertices_out, faces_out, face_indices,
                            was_face_flipped);
   });
 
-  m.def("check_intersection",
+  m.def("intersect_other",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
            EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
           Eigen::MatrixXd verticesA(verticesA_in);
@@ -167,10 +171,9 @@ void bindings(py::module &m) {
           Eigen::MatrixXi facesB(facesB_in);
           const bool first_only = true;
           Eigen::MatrixXi intersecting_face_pairs;
-          bool is_intersecting = igl::copyleft::cgal::intersect_other(
+          return igl::copyleft::cgal::intersect_other(
               verticesA, facesA, verticesB, facesB, first_only,
               intersecting_face_pairs);
-          return is_intersecting;
         });
 
   m.def("intersect_other",
@@ -212,10 +215,8 @@ void bindings(py::module &m) {
     return is_vertex_manifold;
   });
 
-  m.def("is_self_intersecting", [](EigenDRef<MatrixXd> vertices_in,
-                                   EigenDRef<MatrixXi> faces_in) {
-    Eigen::MatrixXd vertices(vertices_in);
-    Eigen::MatrixXi faces(faces_in);
+  m.def("is_self_intersecting", [](EigenDRef<MatrixXd> vertices,
+                                   EigenDRef<MatrixXi> faces) {
     Eigen::MatrixXd vertices_out;
     Eigen::MatrixXi faces_out;
     Eigen::VectorXi intersecting_face_pairs;
@@ -284,7 +285,7 @@ void bindings(py::module &m) {
   //   return std::make_tuple(directed_edges, unique_undirected_edges, edge_map,
   //                          unique_edge_to_edge_map);
   // });
-  
+
   m.def("unique_edge_map", [](EigenDRef<MatrixXi> faces_in) {
     Eigen::MatrixXi faces(faces_in);
     Eigen::MatrixXi directed_edges;

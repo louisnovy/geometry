@@ -235,7 +235,7 @@ class TriangleMesh(Geometry):
         return bindings.WindingNumberBVH(self.vertices, self.faces, 2)
     
     @cached_property
-    def _AABBTree(self):
+    def _aabbtree(self):
         return bindings.AABBTree(self.vertices, self.faces)
 
     def winding_number(self, queries: ArrayLike) -> np.ndarray:
@@ -305,8 +305,11 @@ class TriangleMesh(Geometry):
             Closest point on the surface of the mesh for each query point.
         """
         queries = np.asanyarray(queries, dtype=np.float64)
-        # sqdists, indices, closest = bindings.point_mesh_squared_distance(queries, self.vertices, self.faces)
-        sqdists, indices, closest = self._AABBTree.squared_distance(queries)
+
+        # we could probably pass in flags to the C++ code, but this is a lot easier for now
+        # and is probably not actually degrading performance that much. the results of this
+        # use shared memory with the Eigen matrices so overhead should be minimal.
+        sqdists, indices, closest = self._aabbtree.squared_distance(queries)
 
         if squared:
             dists = sqdists
@@ -561,16 +564,25 @@ class TriangleMesh(Geometry):
     #     face_indices = np.asanyarray(face_indices)
     #     return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
 
-    def submesh(self, face_indices: ArrayLike, neighbor_rings: int = 0) -> TriangleMesh:
-        """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
+    def submesh(self,
+        face_indices: ArrayLike,
+        invert: bool = False,
+        neighbor_rings: int = 0,
+        rings_only=False,
+    ) -> TriangleMesh:
+        """Utility for creating a subset of the mesh.
         
         Parameters
         ----------
         face_indices : `ArrayLike` (n_faces,)
             Indices of the faces to keep.
+        invert : bool, optional (default: False)
+            If True, return unselected faces instead of selected faces.
         neighbor_rings : `int`, optional (default: 0)
             Number of neighbor rings to include. If 0, only the faces in `face_indices` are included.
             If 1, the faces in `face_indices` and their neighbors are included, and so on.
+        rings_only : bool, optional (default: False)
+            If True, only the additional faces from neighbor rings are returned.
 
         Returns
         -------
@@ -578,17 +590,32 @@ class TriangleMesh(Geometry):
             Submesh.
         """
         face_indices = np.asanyarray(face_indices)
-        if neighbor_rings > 0:
-            # TODO: figure out how to do this correctly with both vertex incidence and face adjacency
-            # this causes a jagged edge because it's only using face adjacency.
-            adjacency = self.faces.adjacency_matrix
-            labels = np.zeros(self.n_faces, dtype=np.int64)
-            labels[face_indices] = 1
-            for _ in range(neighbor_rings):
-                labels = labels + labels @ adjacency
-            face_indices = np.nonzero(labels)[0]
 
-        return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
+        if neighbor_rings > 0:
+            # TODO: do this with sparse matrix ops instead?
+            incidence_list = self.vertices.incidence_list # (n_vertices, n_neighbors)
+            
+            already_checked = np.zeros(self.n_faces, dtype=bool)
+            original_face_indices = face_indices
+            new_faces = face_indices
+            for _ in range(neighbor_rings):
+                if not new_faces.size:
+                    break
+                neighbors = np.concatenate([incidence_list[i] for i in self.faces[new_faces].ravel()])
+                # don't include faces that have already been checked
+                new_faces = np.unique(neighbors[~already_checked[neighbors]])
+                already_checked[new_faces] = True
+                face_indices = np.concatenate([face_indices, new_faces])
+
+            if rings_only:
+                face_indices = np.setdiff1d(face_indices, original_face_indices)
+            else:
+                face_indices = np.unique(face_indices)
+
+        if invert:
+            face_indices = np.setdiff1d(np.arange(self.n_faces), face_indices)
+
+        return type(self)(self.vertices, self.faces[face_indices])
 
     
     def separate(self, connectivity: Literal["vertex", "face"] = "face") -> list[TriangleMesh]:
@@ -665,7 +692,7 @@ class TriangleMesh(Geometry):
         unique, inverse = unique_rows(vertices, return_inverse=True)
         return type(self)(unique, inverse[faces])
     
-    def remove_degenerated_faces(self, epsilon: float = 1e-12) -> TriangleMesh:
+    def remove_small_faces(self, epsilon: float = 1e-12) -> TriangleMesh:
         """Remove faces with area smaller than 'epsilon'.
 
         Parameters

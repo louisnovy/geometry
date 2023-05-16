@@ -1,4 +1,4 @@
-from _geometry import remesh_self_intersections, mesh_boolean, check_intersection
+from _geometry import remesh_self_intersections, mesh_boolean, intersect_other
 
 from . import trianglemesh
 
@@ -19,7 +19,7 @@ def check_intersection(
 ) -> bool:
     av, af = a.vertices, a.faces
     bv, bf = b.vertices, b.faces
-    return check_intersection(av, af, bv, bf)
+    return intersect_other(av, af, bv, bf)
 
 def remesh_self_intersections(mesh: trianglemesh.TriangleMesh):
     out = remesh_self_intersections(mesh.vertices, mesh.faces)
