@@ -1,3 +1,4 @@
+#include <igl/AABB.h>
 #include <igl/collapse_small_triangles.h>
 #include <igl/copyleft/cgal/RemeshSelfIntersectionsParam.h>
 #include <igl/copyleft/cgal/convex_hull.h>
@@ -47,9 +48,69 @@ igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
   return it->second;
 }
 
-bool is_single_point(Eigen::MatrixXd &points) { return points.rows() == 1; }
+class WindingNumberBVH {
+public:
+  WindingNumberBVH(Eigen::MatrixXd &vertices, Eigen::MatrixXi &faces,
+                   int order = 2) {
+    igl::fast_winding_number(vertices, faces, order, fwn_bvh);
+  }
+  Eigen::VectorXd query(Eigen::MatrixXd &points, float accuracy_scale = 2) {
+    Eigen::VectorXd winding_numbers;
+    igl::fast_winding_number(fwn_bvh, accuracy_scale, points, winding_numbers);
+    return winding_numbers;
+  }
 
-void igl_bindings(py::module &m) {
+private:
+  igl::FastWindingNumberBVH fwn_bvh;
+};
+
+class AABBTree {
+public:
+  AABBTree(Eigen::MatrixXd &vertices, Eigen::MatrixXi &faces) {
+    this->vertices = vertices;
+    this->faces = faces;
+    if (vertices.cols() == 2) {
+      tree2d.init(vertices, faces);
+    } else if (vertices.cols() == 3) {
+      tree3d.init(vertices, faces);
+    } else {
+      throw std::invalid_argument("Invalid dimension");
+    }
+  }
+
+  std::tuple<Eigen::VectorXd, Eigen::VectorXi, Eigen::MatrixXd> squared_distance(Eigen::MatrixXd &points) {
+    Eigen::VectorXd squared_distances;
+    Eigen::VectorXi face_indices;
+    Eigen::MatrixXd closest_points;
+    if (vertices.cols() == 2) {
+      tree2d.squared_distance(vertices, faces, points, squared_distances,
+                              face_indices, closest_points);
+    } else if (vertices.cols() == 3) {
+      tree3d.squared_distance(vertices, faces, points, squared_distances,
+                              face_indices, closest_points);
+    } else {
+      throw std::invalid_argument("Invalid dimension");
+    }
+    return std::make_tuple(squared_distances, face_indices, closest_points);
+  }
+
+  // TODO: ray intersection
+
+private:
+  Eigen::MatrixXd vertices;
+  Eigen::MatrixXi faces;
+  igl::AABB<Eigen::MatrixXd, 2> tree2d;
+  igl::AABB<Eigen::MatrixXd, 3> tree3d;
+};
+
+void bindings(py::module &m) {
+  py::class_<WindingNumberBVH>(m, "WindingNumberBVH")
+      .def(py::init<Eigen::MatrixXd &, Eigen::MatrixXi &, int>())
+      .def("query", &WindingNumberBVH::query);
+
+  py::class_<AABBTree>(m, "AABBTree")
+      .def(py::init<Eigen::MatrixXd &, Eigen::MatrixXi &>())
+      .def("squared_distance", &AABBTree::squared_distance);
 
   m.def("mesh_boolean", [](EigenDRef<MatrixXd> verticesA_in,
                            EigenDRef<MatrixXi> facesA_in,
@@ -223,6 +284,7 @@ void igl_bindings(py::module &m) {
   //   return std::make_tuple(directed_edges, unique_undirected_edges, edge_map,
   //                          unique_edge_to_edge_map);
   // });
+  
   m.def("unique_edge_map", [](EigenDRef<MatrixXi> faces_in) {
     Eigen::MatrixXi faces(faces_in);
     Eigen::MatrixXi directed_edges;
