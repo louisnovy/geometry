@@ -15,7 +15,7 @@ from ..base import Geometry
 from ..bounds import AABB
 from ..utils import unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
-from ..array import TrackedArray
+from ..array import Array
 from ..cache import AttributeCache, cached_attribute
 
 
@@ -98,14 +98,16 @@ class TriangleMesh(Geometry):
     @cached_property
     def _edge_maps(self):
         # return bindings.unique_edge_map(self.faces)
-        halfedges, edges, edge_map, cumulative_edge_counts, unique_edge_map = bindings.unique_edge_map(self.faces)
+        faces = np.array(self.faces)
+        halfedges, edges, edge_map, cumulative_edge_counts, unique_edge_map = bindings.unique_edge_map(faces)
         counts = np.diff(cumulative_edge_counts)
         return halfedges, edges, edge_map, counts, unique_edge_map
 
     @property
     def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
-        return self._edge_maps[0]
+        # return self._edge_maps[0]
+        return self.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
     
     @property
     def n_halfedges(self) -> int:
@@ -115,10 +117,11 @@ class TriangleMesh(Geometry):
     @property
     def edges(self) -> Edges:
         """`Edges` : Edges of the mesh."""
-        edges = Edges(self.halfedges[self._edge_maps[1]], mesh=self)
-        edges.valences = self._edge_maps[3]
-        edges.boundaries = edges.valences == 1
-        return edges
+        # edges = Edges(self.halfedges[self._edge_maps[1]], mesh=self)
+        # edges.valences = self._edge_maps[3]
+        # edges.boundaries = edges.valences == 1
+        # return edges
+        return Edges.from_halfedges(self.halfedges, mesh=self)
                      
     @property
     def n_edges(self) -> int:
@@ -161,12 +164,12 @@ class TriangleMesh(Geometry):
         return np.sum(a * np.cross(b, c)) / 6
 
     @property
-    def centroid(self) -> np.ndarray:
-        """`ndarray` : Centroid of the mesh.
+    def centroid(self) -> Array:
+        """`Array` : Centroid of the mesh.
 
         The centroid is computed from the mean of face centroids weighted by their area.
         """
-        return self.faces.centroids.T @ self.faces.areas / self.area
+        return Array(self.faces.centroids.T @ self.faces.areas / self.area)
 
     @property
     def aabb(self) -> AABB:
@@ -207,7 +210,8 @@ class TriangleMesh(Geometry):
     @property
     def is_manifold(self) -> bool:
         """`bool` : True if the surface of the mesh is a 2-manifold with or without boundary."""
-        raise NotImplementedError
+        # raise NotImplementedError
+        return bindings.is_vertex_manifold(self.faces) and self.is_edge_manifold
 
     @property
     def is_planar(self) -> bool:
@@ -226,6 +230,14 @@ class TriangleMesh(Geometry):
     
     # *** Point queries ***
 
+    @cached_property
+    def _winding_number_bvh(self):
+        return bindings.WindingNumberBVH(self.vertices, self.faces, 2)
+    
+    @cached_property
+    def _AABBTree(self):
+        return bindings.AABBTree(self.vertices, self.faces)
+
     def winding_number(self, queries: ArrayLike) -> np.ndarray:
         """Compute the winding number at each query point with respect to the mesh.
 
@@ -240,7 +252,7 @@ class TriangleMesh(Geometry):
             Winding number at each query point.        
         """
         queries = np.asanyarray(queries, dtype=np.float64)
-        return bindings.fast_winding_number(self.vertices, self.faces, queries)
+        return self._winding_number_bvh.query(queries, 2)
 
     def contains(self, queries: ArrayLike) -> np.ndarray:
         """Check if each query point is inside the mesh.
@@ -293,7 +305,8 @@ class TriangleMesh(Geometry):
             Closest point on the surface of the mesh for each query point.
         """
         queries = np.asanyarray(queries, dtype=np.float64)
-        sqdists, indices, closest = bindings.point_mesh_squared_distance(queries, self.vertices, self.faces)
+        # sqdists, indices, closest = bindings.point_mesh_squared_distance(queries, self.vertices, self.faces)
+        sqdists, indices, closest = self._AABBTree.squared_distance(queries)
 
         if squared:
             dists = sqdists
@@ -532,13 +545,32 @@ class TriangleMesh(Geometry):
 
         return type(self)(vertices, faces)
     
-    def submesh(self, face_indices: ArrayLike) -> TriangleMesh:
+    # def submesh(self, face_indices: ArrayLike) -> TriangleMesh:
+    #     """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
+        
+    #     Parameters
+    #     ----------
+    #     face_indices : `ArrayLike` (n_faces,)
+    #         Indices of the faces to keep.
+
+    #     Returns
+    #     -------
+    #     `TriangleMesh`
+    #         Submesh.
+    #     """
+    #     face_indices = np.asanyarray(face_indices)
+    #     return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
+
+    def submesh(self, face_indices: ArrayLike, neighbor_rings: int = 0) -> TriangleMesh:
         """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
         
         Parameters
         ----------
         face_indices : `ArrayLike` (n_faces,)
             Indices of the faces to keep.
+        neighbor_rings : `int`, optional (default: 0)
+            Number of neighbor rings to include. If 0, only the faces in `face_indices` are included.
+            If 1, the faces in `face_indices` and their neighbors are included, and so on.
 
         Returns
         -------
@@ -546,7 +578,18 @@ class TriangleMesh(Geometry):
             Submesh.
         """
         face_indices = np.asanyarray(face_indices)
+        if neighbor_rings > 0:
+            # TODO: figure out how to do this correctly with both vertex incidence and face adjacency
+            # this causes a jagged edge because it's only using face adjacency.
+            adjacency = self.faces.adjacency_matrix
+            labels = np.zeros(self.n_faces, dtype=np.int64)
+            labels[face_indices] = 1
+            for _ in range(neighbor_rings):
+                labels = labels + labels @ adjacency
+            face_indices = np.nonzero(labels)[0]
+
         return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
+
     
     def separate(self, connectivity: Literal["vertex", "face"] = "face") -> list[TriangleMesh]:
         """Return a list of meshes, each representing a connected component of the mesh.
@@ -575,7 +618,7 @@ class TriangleMesh(Geometry):
             incidence = self.faces.adjacency_matrix
             get_indices = lambda i: np.squeeze(np.argwhere(i == labels))
         else:
-            raise ValueError(f"Unknown connectivity: {connectivity}")
+            raise ValueError(f"Unknown connectivity method: {connectivity}")
 
         n_components, labels = csgraph.connected_components(incidence, directed=False)
         return [self.submesh(get_indices(i)) for i in range(n_components)]
@@ -946,7 +989,7 @@ class Vertices(Points):
         adjacency = self.adjacency_matrix
         # using the list comprehension is much faster than converting to a linked list in this case
         return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
-    
+
     @cached_attribute
     def incidence_matrix(self) -> csr_array:
         """`csr_array (n_vertices, n_faces)` : Vertex incidence matrix.
@@ -1054,7 +1097,7 @@ class Vertices(Points):
         return defects
 
 
-class Faces(TrackedArray):
+class Faces(Array):
     def __new__(
         cls,
         faces: ArrayLike | None = None,
@@ -1097,7 +1140,7 @@ class Faces(TrackedArray):
 
         # TODO: we don't need to use the binding once we have the edge mappings working
         # this should actually speed things up a bit
-        return bindings.facet_adjacency_matrix(self)
+        return bindings.facet_adjacency_matrix(self.view(np.ndarray).copy())
 
     @cached_attribute
     def adjacency_list(self) -> list[np.ndarray]:
@@ -1276,7 +1319,7 @@ class Faces(TrackedArray):
         r[np.isnan(r)] = 0
         return r
     
-class Edges(TrackedArray):
+class Edges(Array):
     def __new__(
         cls: Type[Edges],
         edges: ArrayLike | None = None,

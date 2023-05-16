@@ -4,13 +4,13 @@ from numpy.typing import ArrayLike
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .array import TrackedArray
+from .array import Array
 from .base import Geometry
 from .bounds import AABB
 from .utils import unique_rows
 from .cache import AttributeCache, cached_attribute
 
-class Points(TrackedArray, Geometry):
+class Points(Array, Geometry):
     """A collection of points in n-dimensional space."""
     def __new__(
         cls,

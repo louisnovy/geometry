@@ -5,9 +5,7 @@
 
 namespace py = pybind11;
 
-
-void igl_bindings(py::module& m);
-
+void bindings(py::module& m);
 
 PYBIND11_MODULE(_geometry, m) {
     m.doc() = "C++ bindings for geometry processing";
@@ -16,5 +14,18 @@ PYBIND11_MODULE(_geometry, m) {
     m.attr("__path__") = "geometry";
     m.attr("__file__") = "geometry/__init__.py";
 
-    igl_bindings(m);
+    bindings(m);
 }
+
+
+
+// void igl_bindings(py::module& m);
+
+// PYBIND11_MODULE(_geometry, m) {
+//     m.doc() = "C++ bindings for geometry processing";
+
+//     py::module igl = m.def_submodule("igl");
+//     igl.doc() = "libigl bindings";
+
+//     igl_bindings(igl);
+// }

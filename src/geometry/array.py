@@ -4,8 +4,8 @@ from xxhash import xxh3_64_intdigest
 import numpy as np
 
 
-class TrackedArray(np.ndarray):
-    """An array that can be hashed based on its contents.
+class Array(np.ndarray):
+    """An immutable by default array that can be hashed based on its contents.
 
     This is a subclass of a numpy ndarray, and can be used in place of one. It can be constructed from
     any array-like object and can be viewed as a standard ndarray with the .view(np.ndarray) method.
@@ -17,7 +17,7 @@ class TrackedArray(np.ndarray):
     8964613590703056768
     >>> a[0] = 4
     >>> a
-    TrackedArray([4, 2, 3])
+    Array([4, 2, 3])
     >>> hash(a)
     404314729484747501
 
@@ -27,12 +27,15 @@ class TrackedArray(np.ndarray):
     array([1, 2, 3])
     >>> b = a.view(Array)
     >>> b
-    TrackedArray([1, 2, 3])
+    Array([1, 2, 3])
     """
 
-    def __new__(cls, *args, **kwargs) -> TrackedArray:
+    def __new__(cls, *args, mutable=False, **kwargs):
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
-        return np.ascontiguousarray(*args, **kwargs).view(cls)
+        self = np.ascontiguousarray(*args, **kwargs).view(cls)
+        # if not mutable:
+        #     self.flags.writeable = False
+        return self
 
     def __array_wrap__(self, obj: np.ndarray, context=None):
         # fix weirdness in numpy that returns a 0d array instead of a scalar when subclassing
@@ -60,10 +63,10 @@ class TrackedArray(np.ndarray):
 
     # helper that will make a new version of a method that invalidates hash
     def invalidate(method: str) -> Callable:
-        def f(self: TrackedArray, *args, **kwargs):
+        def f(self: Array, *args, **kwargs):
             if hasattr(self, "_hash"):
                 del self._hash
-            return getattr(super(TrackedArray, self), method)(*args, **kwargs)
+            return getattr(super(Array, self), method)(*args, **kwargs)
         return f
 
     # any methods that modify useful array data in place should be wrapped

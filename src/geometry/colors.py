@@ -2,11 +2,11 @@ from __future__ import annotations
 from numpy.typing import ArrayLike
 import numpy as np
 
-from .array import TrackedArray
+from .array import Array
 
 # TODO: RGBA?
 
-class Colors(TrackedArray):
+class Colors(Array):
     """Storage for RGB colors."""
     def __new__(cls, colors, **kwargs):
         if colors is None: colors = np.empty((0, 3), **kwargs)
