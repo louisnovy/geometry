@@ -105,6 +105,8 @@ igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
     throw std::invalid_argument("Invalid mesh boolean type");
   }
   return it->second;
+}
+
 
 
 void bindings(py::module &m) {
@@ -176,21 +178,6 @@ void bindings(py::module &m) {
               intersecting_face_pairs);
         });
 
-  m.def("intersect_other",
-        [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
-           EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
-          Eigen::MatrixXd verticesA(verticesA_in);
-          Eigen::MatrixXi facesA(facesA_in);
-          Eigen::MatrixXd verticesB(verticesB_in);
-          Eigen::MatrixXi facesB(facesB_in);
-          const bool first_only = false;
-          Eigen::MatrixXi intersecting_face_pairs;
-          igl::copyleft::cgal::intersect_other(verticesA, facesA, verticesB,
-                                               facesB, first_only,
-                                               intersecting_face_pairs);
-          return intersecting_face_pairs;
-        });
-
   m.def("remesh_self_intersections", [](EigenDRef<MatrixXd> vertices_in,
                                         EigenDRef<MatrixXi> faces_in) {
     Eigen::MatrixXd vertices(vertices_in);
@@ -229,6 +216,21 @@ void bindings(py::module &m) {
         vertices, faces, params, vertices_out, faces_out,
         intersecting_face_pairs, source_face_indices, unique_vertex_indices);
     return intersecting_face_pairs.size() > 0;
+  });
+
+  m.def("self_intersecting_faces", [](EigenDRef<MatrixXd> vertices,
+                                      EigenDRef<MatrixXi> faces) {
+    Eigen::MatrixXd vertices_out;
+    Eigen::MatrixXi faces_out;
+    Eigen::VectorXi intersecting_face_pairs;
+    Eigen::VectorXi source_face_indices;
+    Eigen::VectorXi unique_vertex_indices;
+    igl::copyleft::cgal::RemeshSelfIntersectionsParam params;
+    params.detect_only = true;
+    igl::copyleft::cgal::remesh_self_intersections(
+        vertices, faces, params, vertices_out, faces_out,
+        intersecting_face_pairs, source_face_indices, unique_vertex_indices);
+    return intersecting_face_pairs;
   });
 
   // TODO: pass in edge map to avoid recomputing

@@ -69,7 +69,7 @@ def load(path: str | Path):
 
 def save(mesh, path: str | Path, ascii=False):
     
-    vertices, faces, normals = mesh.vertices, mesh.faces, mesh.normals
+    vertices, faces, normals = mesh.vertices, mesh.faces, mesh.faces.normals
 
     path = Path(path)
     if ascii or path.suffix == ".stla":

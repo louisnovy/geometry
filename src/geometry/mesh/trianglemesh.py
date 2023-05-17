@@ -103,7 +103,7 @@ class TriangleMesh(Geometry):
         counts = np.diff(cumulative_edge_counts)
         return halfedges, edges, edge_map, counts, unique_edge_map
 
-    @property
+    @cached_property
     def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
         # return self._edge_maps[0]
@@ -114,7 +114,7 @@ class TriangleMesh(Geometry):
         """`int` : Number of `Halfedges` in the mesh."""
         return len(self.halfedges)
 
-    @property
+    @cached_property
     def edges(self) -> Edges:
         """`Edges` : Edges of the mesh."""
         # edges = Edges(self.halfedges[self._edge_maps[1]], mesh=self)
@@ -154,7 +154,7 @@ class TriangleMesh(Geometry):
         """`float` : Total surface area of the mesh."""
         return self.faces.areas.sum()
 
-    @property
+    @cached_property
     def volume(self) -> float:
         """`float` : Signed volume of the mesh.
 
@@ -163,7 +163,7 @@ class TriangleMesh(Geometry):
         a, b, c = np.rollaxis(self.faces.corners, 1)
         return np.sum(a * np.cross(b, c)) / 6
 
-    @property
+    @cached_property
     def centroid(self) -> Array:
         """`Array` : Centroid of the mesh.
 
@@ -171,7 +171,7 @@ class TriangleMesh(Geometry):
         """
         return Array(self.faces.centroids.T @ self.faces.areas / self.area)
 
-    @property
+    @cached_property
     def aabb(self) -> AABB:
         """`AABB` : Axis-aligned bounding box of the mesh."""
         return self.vertices.aabb
@@ -196,37 +196,42 @@ class TriangleMesh(Geometry):
         if self.n_faces == 0: return False
         return bool(np.all(self.edges.valences >= 2))
 
-    @property
+    @cached_property
     def is_oriented(self) -> bool:
         """`bool` : True if all neighboring faces are consistently oriented."""
         return bindings.piecewise_constant_winding_number(self.faces)
 
-    @property
+    @cached_property
     def is_edge_manifold(self) -> bool:
         """`bool` : True if all edges are shared by exactly one or two faces."""
         if self.n_faces == 0: return False
         return bool(np.all(np.isin(self.edges.valences, [1, 2])))
     
-    @property
+    @cached_property
+    def is_vertex_manifold(self) -> bool:
+        """`bool` : True if all vertices are shared by exactly one or two faces."""
+        if self.n_faces == 0: return False
+        return bool(np.all(bindings.is_vertex_manifold(self.faces)))
+    
+    @cached_property
     def is_manifold(self) -> bool:
         """`bool` : True if the surface of the mesh is a 2-manifold with or without boundary."""
-        # raise NotImplementedError
-        return bindings.is_vertex_manifold(self.faces) and self.is_edge_manifold
+        return self.is_edge_manifold and self.is_vertex_manifold
 
     @property
     def is_planar(self) -> bool:
         """`bool` : True if the mesh lies in a single plane."""
         return self.vertices.is_planar
 
-    @property
+    @cached_property
     def is_self_intersecting(self) -> bool:
         """`bool` : True if the mesh has any self-intersecting faces."""
         return bindings.is_self_intersecting(self.vertices, self.faces)
 
-    @property
+    @cached_property
     def is_watertight(self) -> bool:
         """`bool` : True if the mesh is a closed, oriented, manifold surface with no self-intersections."""
-        return self.is_manifold and self.is_closed and self.is_oriented and not self.is_self_intersecting
+        return self.is_closed and self.is_oriented and self.is_manifold and not self.is_self_intersecting
     
     # *** Point queries ***
 
@@ -329,7 +334,6 @@ class TriangleMesh(Geometry):
 
         return dists
 
-    
     def sample_surface(
         self,
         n_samples: int,
@@ -547,42 +551,27 @@ class TriangleMesh(Geometry):
         faces = np.concatenate([self.faces] + [m.faces + indices[i] for i, m in enumerate(other)])
 
         return type(self)(vertices, faces)
-    
-    # def submesh(self, face_indices: ArrayLike) -> TriangleMesh:
-    #     """Given face indices that are a subset of the mesh, return a new mesh with only those faces.
-        
-    #     Parameters
-    #     ----------
-    #     face_indices : `ArrayLike` (n_faces,)
-    #         Indices of the faces to keep.
-
-    #     Returns
-    #     -------
-    #     `TriangleMesh`
-    #         Submesh.
-    #     """
-    #     face_indices = np.asanyarray(face_indices)
-    #     return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
 
     def submesh(self,
         face_indices: ArrayLike,
-        invert: bool = False,
-        neighbor_rings: int = 0,
+        rings: int = 0,
         rings_only=False,
+        invert_selection: bool = False,
     ) -> TriangleMesh:
-        """Utility for creating a subset of the mesh.
+        """Create a subset of the mesh from a selection of faces.
+        Optionally add to the selection with adjacency rings around the face_indices.
         
         Parameters
         ----------
         face_indices : `ArrayLike` (n_faces,)
-            Indices of the faces to keep.
-        invert : bool, optional (default: False)
+            Selection of faces to include in the submesh.
+        rings : `int`, optional (default: 0)
+            Number of rings to select. If 0, only the faces in `face_indices` are selected.
+            If 1, the faces in `face_indices` and their neighbors are selected, and so on.
+        rings_only : `bool`, optional (default: False)
+            If True, only the ring faces are returned, not the original faces in `face_indices`.
+        invert_selection : `bool`, optional (default: False)
             If True, return unselected faces instead of selected faces.
-        neighbor_rings : `int`, optional (default: 0)
-            Number of neighbor rings to include. If 0, only the faces in `face_indices` are included.
-            If 1, the faces in `face_indices` and their neighbors are included, and so on.
-        rings_only : bool, optional (default: False)
-            If True, only the additional faces from neighbor rings are returned.
 
         Returns
         -------
@@ -591,16 +580,19 @@ class TriangleMesh(Geometry):
         """
         face_indices = np.asanyarray(face_indices)
 
-        if neighbor_rings > 0:
+        if rings > 0:
             # TODO: do this with sparse matrix ops instead?
-            incidence_list = self.vertices.incidence_list # (n_vertices, n_neighbors)
+            incidence_list = self.vertices.incidence_list # (n_vertices, n_face_neighbors)
             
             already_checked = np.zeros(self.n_faces, dtype=bool)
+            # TODO: clean up naming; this is a bit confusing
             original_face_indices = face_indices
             new_faces = face_indices
-            for _ in range(neighbor_rings):
+            for _ in range(rings):
                 if not new_faces.size:
+                    # we have fully explored the mesh
                     break
+                # get all neighbors of the current faces
                 neighbors = np.concatenate([incidence_list[i] for i in self.faces[new_faces].ravel()])
                 # don't include faces that have already been checked
                 new_faces = np.unique(neighbors[~already_checked[neighbors]])
@@ -612,10 +604,10 @@ class TriangleMesh(Geometry):
             else:
                 face_indices = np.unique(face_indices)
 
-        if invert:
+        if invert_selection:
             face_indices = np.setdiff1d(np.arange(self.n_faces), face_indices)
 
-        return type(self)(self.vertices, self.faces[face_indices])
+        return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
 
     
     def separate(self, connectivity: Literal["vertex", "face"] = "face") -> list[TriangleMesh]:
@@ -635,7 +627,7 @@ class TriangleMesh(Geometry):
         -----
         While vertex-based connectivity is faster, it is less robust than face connectivity.
         For example, the de-duplication when saving and loading an STL file will result in
-        new connectivity if vertices are too close.
+        new connectivity if vertices are too close or duplicated.
         """
 
         if connectivity == "vertex":
@@ -1263,6 +1255,12 @@ class Faces(Array):
         """`ndarray (n,)` : Whether each face is degenerated (has zero area).
         This can happen if two vertices are the same, or if all three vertices are colinear."""
         return self.double_areas == 0
+    
+    @cached_attribute
+    def self_intersecting(self) -> np.ndarray:
+        """`ndarray (n,)` : Whether each face is self-intersecting."""
+        intersecting_face_indices = bindings.self_intersecting_faces(self._mesh.vertices, self)
+        return np.isin(np.arange(len(self)), intersecting_face_indices)
 
     @cached_attribute
     def normals(self):
@@ -1345,6 +1343,7 @@ class Faces(Array):
             r = self.areas / (0.5 * (a + b + c))
         r[np.isnan(r)] = 0
         return r
+
     
 class Edges(Array):
     def __new__(

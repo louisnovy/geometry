@@ -66,7 +66,7 @@ class Points(Array, Geometry):
         singular_values = np.linalg.svd(self - self.mean(axis=0), compute_uv=False, full_matrices=False)
         return np.allclose(singular_values[2], 0, atol=1e-6) # TODO: tolerance should be configurable
 
-    @property
+    @cached_attribute
     def kdtree(self) -> cKDTree:
         return cKDTree(self)
     
