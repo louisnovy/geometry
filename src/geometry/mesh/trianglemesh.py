@@ -646,15 +646,15 @@ class TriangleMesh(Geometry):
     # *** Mesh cleaning ***
     
     def remove_unreferenced_vertices(self) -> TriangleMesh:
-        """Remove vertices that are not referenced by any face.
+        """Remove vertices that are not referenced by any face. Faces are renumbered accordingly.
 
         Returns
         -------
         `TriangleMesh`
-            Mesh with only referenced vertices.
+            Mesh with unreferenced vertices removed.
         """
         referenced = self.vertices.referenced
-        return type(self)(self.vertices[referenced], np.cumsum(referenced)[self.faces] - 1)
+        return type(self)(self.vertices[referenced], self.faces - (~referenced).cumsum()[self.faces])
     
     # TODO: should be called merge_close_vertices?
     def remove_duplicated_vertices(self, epsilon: float = 0) -> TriangleMesh:
@@ -698,6 +698,8 @@ class TriangleMesh(Geometry):
             Mesh with small faces removed.
         """
         raise NotImplementedError
+        # faces = bindings.collapse_small_triangles(self.vertices, self.faces, epsilon)
+        # return type(self)(self.vertices, faces)
     
     def remove_duplicated_faces(self) -> TriangleMesh:
         """Remove duplicate faces.
@@ -707,7 +709,8 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Mesh with duplicate faces removed.
         """
-        raise NotImplementedError
+        faces, indices = bindings.resolve_duplicated_faces(self.faces)
+        return type(self)(self.vertices, self.faces[indices])
 
     def remove_obtuse_triangles(self, max_angle: float = 90) -> TriangleMesh:
         """Remove triangles with any internal angle greater than 'max_angle'.

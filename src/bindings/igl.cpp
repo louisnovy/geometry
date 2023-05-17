@@ -13,6 +13,7 @@
 #include <igl/piecewise_constant_winding_number.h>
 #include <igl/point_mesh_squared_distance.h>
 #include <igl/unique_edge_map.h>
+#include <igl/resolve_duplicated_faces.h>
 #include <igl/winding_number.h>
 #include <pybind11/eigen.h>
 #include <pybind11/functional.h>
@@ -231,6 +232,14 @@ void bindings(py::module &m) {
         vertices, faces, params, vertices_out, faces_out,
         intersecting_face_pairs, source_face_indices, unique_vertex_indices);
     return intersecting_face_pairs;
+  });
+
+  m.def("resolve_duplicated_faces", [](EigenDRef<MatrixXi> faces_in) {
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::MatrixXi faces_out;
+    Eigen::VectorXi map;
+    igl::resolve_duplicated_faces(faces, faces_out, map);
+    return std::make_tuple(faces_out, map);
   });
 
   // TODO: pass in edge map to avoid recomputing
