@@ -660,7 +660,12 @@ class TriangleMesh(Geometry):
             Mesh with unreferenced vertices removed.
         """
         referenced = self.vertices.referenced
-        return type(self)(self.vertices[referenced], self.faces - (~referenced).cumsum()[self.faces])
+
+        if not referenced.all():
+            return type(self)(self.vertices[referenced], self.faces - (~referenced).cumsum()[self.faces])
+        
+        return type(self)(self.vertices, self.faces)
+        
     
     # TODO: should be called merge_close_vertices?
     def remove_duplicated_vertices(self, epsilon: float = 0) -> TriangleMesh:
@@ -900,13 +905,15 @@ class TriangleMesh(Geometry):
         """
         raise NotImplementedError
     
-    def crop(self, other: TriangleMesh, invert: bool = False) -> TriangleMesh:
-        """Crop by resolving self intersections and removing all faces that are not inside the other mesh.
+    def crop(self, other: TriangleMesh, cull: bool = False, invert: bool = False) -> TriangleMesh:
+        """Crop by removing the part of self that is outside the other mesh.
 
         Parameters
         ----------
         other : `TriangleMesh`
             Other mesh.
+        cull : `bool`, optional (default: False)
+            If True, remove faces by simply culling them instead of resolving intersections.
         invert : `bool`, optional (default: False)
             If True, invert the crop by removing all faces that are inside the other mesh instead.
 
@@ -915,8 +922,20 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Cropped mesh.
         """
-        raise NotImplementedError
-    
+        if cull:
+            inside = other.contains(self.faces.centroids)
+            return self.submesh(~inside if invert else inside)
+
+        # combine meshes and resolve self-intersections
+        both = self.concatenate(other)
+        vertices, faces, _, birth_indices, _ = bindings.remesh_self_intersections(both.vertices, both.faces)
+        resolved = type(self)(vertices, faces)
+        # submesh with the faces from original self
+        resolved_self = resolved.submesh(birth_indices < self.n_faces)
+        # which faces are inside the other mesh?
+        inside = other.contains(resolved_self.faces.centroids)
+        return resolved_self.submesh(~inside if invert else inside)
+
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
 
@@ -993,6 +1012,11 @@ class TriangleMesh(Geometry):
         mesh.add_scalar_quantity("faces_obtuse", self.faces.obtuse, defined_on="faces")
         mesh.add_scalar_quantity("faces_acute", self.faces.acute, defined_on="faces")
         mesh.add_scalar_quantity("faces_right", self.faces.right, defined_on="faces")
+
+        # edges = ps.register_curve_network("edges", self.vertices, self.edges)
+        # edges.add_scalar_quantity("vertex_valences", self.vertices.valences)
+        # edges.add_scalar_quantity("edge_lengths", self.edges.lengths, defined_on="edges")
+
         ps.show()
     
 
