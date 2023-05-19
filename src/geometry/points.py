@@ -79,35 +79,43 @@ class Points(Array, Geometry):
         else:
             raise ValueError(f"Unknown downsampling method: {method}")
     
-    def plot(self, fig=None, show=False, connect=False, **kwargs):
-        from plotly import graph_objects as go
+    # def plot(self, fig=None, show=False, connect=False, **kwargs):
+    #     from plotly import graph_objects as go
 
-        fig = go.Figure() if fig is None else fig
+    #     fig = go.Figure() if fig is None else fig
 
-        idx = np.arange(len(self))
-        if self.dim in (2, 3):
-            scatter = go.Scatter3d if self.dim == 3 else go.Scatter
-            args = dict(
-                x=self[:, 0],
-                y=self[:, 1],
-                marker=dict(size=2, color=self.colors if self.colors is not None else None),
-                text=idx,
-                mode="markers" if not connect else "lines",
-                **kwargs,
-            )
-            if self.dim == 3:
-                args["z"] = self[:, 2]
-            fig.add_trace(scatter(**args))
-        elif self.dim == 1:
-            fig.add_trace(go.Bar(x=self[:, 1], text=idx, **kwargs))
+    #     idx = np.arange(len(self))
+    #     if self.dim in (2, 3):
+    #         scatter = go.Scatter3d if self.dim == 3 else go.Scatter
+    #         args = dict(
+    #             x=self[:, 0],
+    #             y=self[:, 1],
+    #             marker=dict(size=2, color=self.colors if self.colors is not None else None),
+    #             text=idx,
+    #             mode="markers" if not connect else "lines",
+    #             **kwargs,
+    #         )
+    #         if self.dim == 3:
+    #             args["z"] = self[:, 2]
+    #         fig.add_trace(scatter(**args))
+    #     elif self.dim == 1:
+    #         fig.add_trace(go.Bar(x=self[:, 1], text=idx, **kwargs))
 
-        fig.update_layout(scene_aspectmode="data")
+    #     fig.update_layout(scene_aspectmode="data")
         
-        fig.show() if show else None
+    #     fig.show() if show else None
 
-    def show(self, **kwargs):
-        self.plot(show=True, **kwargs)
+    # def show(self, **kwargs):
+    #     self.plot(show=True, **kwargs)
 
+    def show(self):
+        import polyscope as ps
+        ps.init()
+        ps.set_up_dir("z_up")
+        ps.set_ground_plane_mode("none")
+        points = ps.register_point_cloud("points", self)
+        points.add_color_quantity("colors", self.colors) if self.colors is not None else None
+        ps.show()
 
 def downsample_poisson(points: Points, radius: float) -> Points:
     """Downsample a point cloud by removing neighbors within a given radius."""

@@ -367,18 +367,19 @@ class TriangleMesh(Geometry):
 
         if self.is_empty:
             raise ValueError("Cannot sample from an empty mesh.")
+
         if face_weights is None:
-            double_areas = self.faces.double_areas
-            face_weights = double_areas / double_areas.sum()
+            face_weights = self.faces.double_areas
         else:
             face_weights = np.asarray(face_weights)
-            if not all([
-                face_weights.ndim == 1,
-                len(face_weights) == len(self.faces),
-                np.allclose(face_weights.sum(), 1),
-            ]):
-                raise ValueError("Face weights must be a valid (n_faces,) probability distribution.")
-            
+            if not face_weights.ndim == 1 and len(face_weights) == len(self.faces):
+                raise ValueError(
+                    "face_weights must be a 1D array with length equal to the number of faces."
+                    f"face_weights.shape = {face_weights.shape}, faces.shape = {self.faces.shape}"
+                )
+
+        face_weights /= face_weights.sum()
+        
         rng = np.random.default_rng(seed)
         # distribute samples on the simplex
         barycentric = rng.dirichlet(barycentric_weights, size=n_samples)
@@ -527,7 +528,7 @@ class TriangleMesh(Geometry):
         """
         return type(self)(self.vertices, self.faces[:, ::-1])
 
-    def concatentate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
+    def concatenate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
         """Concatenate this mesh with another mesh or list of meshes.
 
         Parameters
@@ -545,10 +546,17 @@ class TriangleMesh(Geometry):
 
         if not all(isinstance(m, type(self)) for m in other):
             raise ValueError(f"Meshes must all be of the same type: {type(self)}")
-    
-        indices = np.cumsum([0] + [m.n_vertices for m in other])
-        vertices = np.concatenate([self.vertices] + [m.vertices for m in other])
-        faces = np.concatenate([self.faces] + [m.faces + indices[i] for i, m in enumerate(other)])
+
+        i = 0
+        vertices = []
+        faces = []
+        for m in [self, *other]:
+            vertices.append(m.vertices)
+            faces.append(m.faces + i)
+            i += len(m.vertices)
+
+        vertices = np.concatenate(vertices)
+        faces = np.concatenate(faces)
 
         return type(self)(vertices, faces)
 
@@ -583,14 +591,13 @@ class TriangleMesh(Geometry):
         if rings > 0:
             # TODO: do this with sparse matrix ops instead?
             incidence_list = self.vertices.incidence_list # (n_vertices, n_face_neighbors)
-            
             already_checked = np.zeros(self.n_faces, dtype=bool)
             # TODO: clean up naming; this is a bit confusing
             original_face_indices = face_indices
             new_faces = face_indices
             for _ in range(rings):
                 if not new_faces.size:
-                    # we have fully explored the mesh
+                    # we have a fully connected selection
                     break
                 # get all neighbors of the current faces
                 neighbors = np.concatenate([incidence_list[i] for i in self.faces[new_faces].ravel()])
@@ -641,7 +648,6 @@ class TriangleMesh(Geometry):
 
         n_components, labels = csgraph.connected_components(incidence, directed=False)
         return [self.submesh(get_indices(i)) for i in range(n_components)]
-
     
     # *** Mesh cleaning ***
     
@@ -680,6 +686,8 @@ class TriangleMesh(Geometry):
 
         if epsilon > 0:
             vertices = vertices.round(int(-np.log10(epsilon)))
+        elif epsilon < 0:
+            raise ValueError("epsilon must be >= 0")
 
         unique, inverse = unique_rows(vertices, return_inverse=True)
         return type(self)(unique, inverse[faces])
@@ -915,60 +923,77 @@ class TriangleMesh(Geometry):
     def __hash__(self) -> int:
         return hash((self.vertices, self.faces))
     
-    def plot(self, fig=None, show=False, opacity=1, **kwargs):
-        if self.dim == 2:
-            import matplotlib.pyplot as plt
-            ax = plt.gca()
-            ax.set_aspect('equal')
-            triangles = self.faces.corners
-            for triangle in triangles:
-                ax.fill(triangle[:, 0], triangle[:, 1], **kwargs)
-            if show: plt.tight_layout(); plt.show()
-            return ax
+    # def plot(self, fig=None, show=False, opacity=1, **kwargs):
+    #     if self.dim == 2:
+    #         import matplotlib.pyplot as plt
+    #         ax = plt.gca()
+    #         ax.set_aspect('equal')
+    #         triangles = self.faces.corners
+    #         for triangle in triangles:
+    #             ax.fill(triangle[:, 0], triangle[:, 1], **kwargs)
+    #         if show: plt.tight_layout(); plt.show()
+    #         return ax
 
-        from plotly import graph_objects as go
-        fig = go.Figure() if fig is None else fig
-        m = self
-        fig.add_trace(
-            go.Mesh3d(
-                x=m.vertices[:, 0],
-                y=m.vertices[:, 1],
-                z=m.vertices[:, 2],
-                i=m.faces[:, 0],
-                j=m.faces[:, 1],
-                k=m.faces[:, 2],
-                flatshading=True,
-                opacity=opacity,
-                # lighting=dict(ambient=0.8, diffuse=0.5, fresnel=0.1, specular=0.8, roughness=0.0),
-                facecolor=m.faces.colors,
-                vertexcolor=m.vertices.colors,
-            )
-        )
-        props = {
-            # m.faces.circumcenters: "yellow",
-            # m.faces.incenters: "orange",
-            # m.faces.orthocenters: "purple",
-            # m.faces.centroids: "blue",
-            # m.edges.midpoints: "green"
-        }
-        for prop, color in props.items():
-            fig.add_trace(
-                go.Scatter3d(
-                    x=prop[:, 0],
-                    y=prop[:, 1],
-                    z=prop[:, 2],
-                    mode="markers",
-                    marker=dict(size=2, color=color),
-                )
-            )
+    #     from plotly import graph_objects as go
+    #     fig = go.Figure() if fig is None else fig
+    #     m = self
+    #     fig.add_trace(
+    #         go.Mesh3d(
+    #             x=m.vertices[:, 0],
+    #             y=m.vertices[:, 1],
+    #             z=m.vertices[:, 2],
+    #             i=m.faces[:, 0],
+    #             j=m.faces[:, 1],
+    #             k=m.faces[:, 2],
+    #             flatshading=True,
+    #             opacity=opacity,
+    #             # lighting=dict(ambient=0.8, diffuse=0.5, fresnel=0.1, specular=0.8, roughness=0.0),
+    #             facecolor=m.faces.colors,
+    #             vertexcolor=m.vertices.colors,
+    #         )
+    #     )
+    #     props = {
+    #         # m.faces.circumcenters: "yellow",
+    #         # m.faces.incenters: "orange",
+    #         # m.faces.orthocenters: "purple",
+    #         # m.faces.centroids: "blue",
+    #         # m.edges.midpoints: "green"
+    #     }
+    #     for prop, color in props.items():
+    #         fig.add_trace(
+    #             go.Scatter3d(
+    #                 x=prop[:, 0],
+    #                 y=prop[:, 1],
+    #                 z=prop[:, 2],
+    #                 mode="markers",
+    #                 marker=dict(size=2, color=color),
+    #             )
+    #         )
 
-        fig.update_layout(scene=dict(aspectmode='data'))
-        fig.show() if show else None
+    #     fig.update_layout(scene=dict(aspectmode='data'))
+    #     fig.show() if show else None
     
-    def show(self, **kwargs):
-        self.plot(show=True, **kwargs)
-        
+    # def show(self, **kwargs):
+    #     self.plot(show=True, **kwargs)
 
+    def show(self):
+        import polyscope as ps
+
+        ps.init()
+        ps.set_up_dir("z_up")
+        mesh = ps.register_surface_mesh("mesh", self.vertices, self.faces)
+        # mesh.add_color_quantity("vertex_colors", self.vertices.colors)
+        mesh.add_scalar_quantity("vertex_gaussian_curvatures", self.vertices.gaussian_curvatures)
+        mesh.add_vector_quantity("vertex_normals", self.vertices.normals)
+        mesh.add_scalar_quantity("vertex_areas", self.vertices.areas)
+        mesh.add_scalar_quantity("vertex_voronoi_areas", self.vertices.voronoi_areas)
+        mesh.add_scalar_quantity("angle_defects", self.vertices.angle_defects)
+        mesh.add_vector_quantity("face_normals", self.faces.normals, defined_on="faces")
+        mesh.add_scalar_quantity("face_areas", self.faces.areas, defined_on="faces")
+        mesh.add_scalar_quantity("faces_obtuse", self.faces.obtuse, defined_on="faces")
+        mesh.add_scalar_quantity("faces_acute", self.faces.acute, defined_on="faces")
+        mesh.add_scalar_quantity("faces_right", self.faces.right, defined_on="faces")
+        ps.show()
     
 
 class Vertices(Points):
@@ -1033,6 +1058,7 @@ class Vertices(Points):
         incidence = self.incidence_matrix
         return [incidence.indices[incidence.indptr[i] : incidence.indptr[i + 1]] for i in range(len(self))]
 
+    # TODO: replace with angle weighted normals?
     @cached_attribute
     def normals(self) -> np.ndarray:
         """`ndarray (n, 3)` : Unitized vertex normals.
@@ -1089,7 +1115,8 @@ class Vertices(Points):
         5.981308411214953
         5.995316159250586
         """
-        return self.adjacency_matrix.sum(axis=0)
+        # return self.adjacency_matrix.sum(axis=0)
+        return np.bincount(self._mesh.faces.ravel(), minlength=len(self))
 
     @cached_attribute
     def referenced(self) -> np.ndarray:
@@ -1113,10 +1140,17 @@ class Vertices(Points):
         faces = self._mesh.faces
         # sum the internal angles of each face for each vertex
         summed_angles = np.bincount(faces.ravel(), weights=faces.internal_angles.ravel())
-        defects = 2 * np.pi - summed_angles
-        # boundary vertices have zero angle defect
-        defects[self.boundaries] = 0
+        # non-boundary vertices have 2π - sum of adjacent angles
+        # boundary vertices have π - sum of adjacent angles
+        defects = np.full(len(self), np.pi)
+        defects[~self.boundaries] += np.pi - summed_angles[~self.boundaries]
+        defects[self.boundaries] -= summed_angles[self.boundaries]
         return defects
+    
+    @cached_attribute
+    def gaussian_curvatures(self) -> np.ndarray:
+        """`ndarray (n,)` : Gaussian curvature at each vertex."""
+        return self.angle_defects / self.areas
 
 
 class Faces(Array):
