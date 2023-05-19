@@ -750,7 +750,7 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Mesh with self-intersections resolved.
         """
-        raise NotImplementedError
+        return type(self)(*bindings.remesh_self_intersections(self.vertices, self.faces)[0:2])
     
     def collapse_short_edges(self, length: float | None = None) -> TriangleMesh:
         """Collapse edges shorter than 'length'.
@@ -859,6 +859,10 @@ class TriangleMesh(Geometry):
         raise NotImplementedError
     
     # *** CSG ***
+
+    def _boolean(self, other: TriangleMesh, operation) -> TriangleMesh:
+        vertices, faces, source_faces = bindings.mesh_boolean(self.vertices, self.faces, other.vertices, other.faces, operation)
+        return type(self)(vertices, faces)
     
     def union(self, other: TriangleMesh) -> TriangleMesh:
         """Compute the union of two meshes.
@@ -873,7 +877,7 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Union of the two meshes.
         """
-        raise NotImplementedError
+        return self._boolean(other, "union")
     
     def intersection(self, other: TriangleMesh) -> TriangleMesh:
         """Compute the intersection of two meshes.
@@ -888,7 +892,7 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Intersection of the two meshes.
         """
-        raise NotImplementedError
+        return self._boolean(other, "intersection")
     
     def difference(self, other: TriangleMesh) -> TriangleMesh:
         """Compute the difference of two meshes.
@@ -903,7 +907,7 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Difference of the two meshes.
         """
-        raise NotImplementedError
+        return self._boolean(other, "difference")
     
     def crop(self, other: TriangleMesh, cull: bool = False, invert: bool = False) -> TriangleMesh:
         """Crop by removing the part of self that is outside the other mesh.
@@ -923,8 +927,10 @@ class TriangleMesh(Geometry):
             Cropped mesh.
         """
         if cull:
-            inside = other.contains(self.faces.centroids)
-            return self.submesh(~inside if invert else inside)
+            inside = other.contains(self.faces.corners.reshape(-1, 3))
+            # all three must be inside to keep the face
+            selection = inside.reshape(-1, 3).all(axis=1)
+            return self.submesh(~selection if invert else selection)
 
         # combine meshes and resolve self-intersections
         both = self.concatenate(other)
@@ -1229,7 +1235,7 @@ class Faces(Array):
         return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
 
     @cached_attribute
-    def corners(self):
+    def corners(self) -> np.ndarray:
         """`ndarray (n, 3, 3)` : Coordinates of each corner for each face."""
         return self._mesh.vertices.view(np.ndarray)[self]
 
