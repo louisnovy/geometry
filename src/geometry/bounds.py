@@ -19,14 +19,17 @@ class AABB(Geometry):
         if not self.min.shape == self.max.shape:
             raise ValueError("min and max must have the same shape")
 
-    def sample(self, n_samples=1):
-        """Uniformly sample `n` points within the AABB."""
-        return points.Points(np.random.uniform(self.min, self.max, (n_samples, *self.min.shape)))
+    def __getitem__(self, i):
+        return (self.min, self.max)[i] # allows: min, max = AABB and passing to AABB constructor
 
-    def contains(self, queries: ArrayLike):
-        """Array of booleans indicating whether each query point is contained within the AABB."""
-        queries = np.asanyarray(queries)
-        return np.all((queries >= self.min) & (queries <= self.max), axis=1)
+    def __array__(self):
+        return np.array((self.min, self.max))
+
+    def __hash__(self):
+        return hash((self.min, self.max))
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__}(min={self.min}, max={self.max})>"
 
     @property
     def dim(self):
@@ -43,17 +46,25 @@ class AABB(Geometry):
     @property
     def diagonal(self) -> float:
         return float(np.linalg.norm(self.extents))
+    
+    def sample(self, n_samples=1):
+        """Uniformly sample `n` points within the AABB."""
+        return points.Points(np.random.uniform(self.min, self.max, (n_samples, *self.min.shape)))
 
-    def __getitem__(self, i):
-        return (self.min, self.max)[i] # allows: min, max = AABB and passing to AABB constructor
-
-    # def __array__
-
-    def __hash__(self):
-        return hash((self.min, self.max))
-
-    def __repr__(self) -> str:
-        return f"<{type(self).__name__}(min={self.min}, max={self.max})>"
+    def contains(self, queries: ArrayLike):
+        """Array of booleans indicating whether each query point is contained within the AABB."""
+        queries = np.asanyarray(queries)
+        return np.all((queries >= self.min) & (queries <= self.max), axis=1)
+    
+    def offset(self, offset) -> AABB:
+        return type(self)(self.min - offset, self.max + offset)
+    
+    def union(self, other: AABB) -> AABB:
+        return type(self)(np.minimum(self.min, other.min), np.maximum(self.max, other.max))
+    def intersection(self, other: AABB) -> AABB:
+        return type(self)(np.maximum(self.min, other.min), np.minimum(self.max, other.max))
+    def difference(self, other: AABB) -> AABB:
+        return type(self)(self.min, self.max)
 
 
 class OBB:

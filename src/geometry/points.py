@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Literal
 from numpy.typing import ArrayLike
 
 import numpy as np
@@ -70,14 +71,9 @@ class Points(Array, Geometry):
     def kdtree(self) -> cKDTree:
         return cKDTree(self)
     
-    def downsample(self, epsilon: float, method: str = "poisson") -> Points:
+    def downsample(self, epsilon: float, method: Literal["poisson", "grid"] = "poisson") -> Points:
         """Downsample the point cloud using the specified method."""
-        if method == "poisson":
-            return downsample_poisson(self, epsilon)
-        elif method == "grid":
-            return downsample_grid(self, epsilon)
-        else:
-            raise ValueError(f"Unknown downsampling method: {method}")
+        return {"poisson": downsample_poisson, "grid": downsample_grid}[method](self, epsilon)
     
     # def plot(self, fig=None, show=False, connect=False, **kwargs):
     #     from plotly import graph_objects as go

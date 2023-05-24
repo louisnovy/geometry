@@ -1,19 +1,22 @@
 #include <igl/AABB.h>
+#include <igl/bfs_orient.h>
 #include <igl/collapse_small_triangles.h>
 #include <igl/copyleft/cgal/RemeshSelfIntersectionsParam.h>
 #include <igl/copyleft/cgal/convex_hull.h>
+#include <igl/copyleft/cgal/extract_cells.h>
 #include <igl/copyleft/cgal/fast_winding_number.h>
 #include <igl/copyleft/cgal/intersect_other.h>
 #include <igl/copyleft/cgal/mesh_boolean.h>
 #include <igl/copyleft/cgal/outer_hull.h>
 #include <igl/copyleft/cgal/remesh_self_intersections.h>
+#include <igl/copyleft/cgal/minkowski_sum.h>
 #include <igl/facet_adjacency_matrix.h>
 #include <igl/fast_winding_number.h>
 #include <igl/is_vertex_manifold.h>
 #include <igl/piecewise_constant_winding_number.h>
 #include <igl/point_mesh_squared_distance.h>
-#include <igl/unique_edge_map.h>
 #include <igl/resolve_duplicated_faces.h>
+#include <igl/unique_edge_map.h>
 #include <igl/winding_number.h>
 #include <pybind11/eigen.h>
 #include <pybind11/functional.h>
@@ -32,7 +35,6 @@ using EigenDRef = Ref<MatrixType, 0, EigenDStride>;
 // TODO: modularize these and split into headers so we don't have to compile
 // all this every time
 
-
 class WindingNumberBVH {
 public:
   WindingNumberBVH(Eigen::MatrixXd &vertices, Eigen::MatrixXi &faces,
@@ -49,7 +51,6 @@ private:
   igl::FastWindingNumberBVH fwn_bvh;
 };
 
-
 class AABBTree {
 public:
   AABBTree(Eigen::MatrixXd &vertices, Eigen::MatrixXi &faces) {
@@ -64,7 +65,8 @@ public:
     }
   }
 
-  std::tuple<Eigen::VectorXd, Eigen::VectorXi, Eigen::MatrixXd> squared_distance(Eigen::MatrixXd &points) {
+  std::tuple<Eigen::VectorXd, Eigen::VectorXi, Eigen::MatrixXd>
+  squared_distance(Eigen::MatrixXd &points) {
     Eigen::VectorXd squared_distances;
     Eigen::VectorXi face_indices;
     Eigen::MatrixXd closest_points;
@@ -89,7 +91,6 @@ private:
   igl::AABB<Eigen::MatrixXd, 3> tree3d;
 };
 
-
 // converts a string to a valid igl::MeshBooleanType enum
 igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
   static const std::map<std::string, igl::MeshBooleanType> type_map = {
@@ -107,8 +108,6 @@ igl::MeshBooleanType get_mesh_boolean_type(std::string type) {
   }
   return it->second;
 }
-
-
 
 void bindings(py::module &m) {
   py::class_<WindingNumberBVH>(m, "WindingNumberBVH")
@@ -136,6 +135,24 @@ void bindings(py::module &m) {
     return std::make_tuple(vertices_out, faces_out, source_face_index);
   });
 
+  m.def("mesh_mesh_minkowski_sum", [](EigenDRef<MatrixXd> verticesA_in,
+                                      EigenDRef<MatrixXi> facesA_in,
+                                      EigenDRef<MatrixXd> verticesB_in,
+                                      EigenDRef<MatrixXi> facesB_in,
+                                      bool resolve_overlaps = true) {
+    Eigen::MatrixXd verticesA(verticesA_in);
+    Eigen::MatrixXi facesA(facesA_in);
+    Eigen::MatrixXd verticesB(verticesB_in);
+    Eigen::MatrixXi facesB(facesB_in);
+    Eigen::MatrixXd vertices_out;
+    Eigen::MatrixXi faces_out;
+    Eigen::MatrixXi source_face_index;
+    igl::copyleft::cgal::minkowski_sum(
+        verticesA, facesA, verticesB, facesB, resolve_overlaps, 
+        vertices_out, faces_out, source_face_index);
+    return std::make_tuple(vertices_out, faces_out, source_face_index);
+  });
+
   m.def("point_mesh_squared_distance", [](EigenDRef<MatrixXd> points_in,
                                           EigenDRef<MatrixXd> vertices_in,
                                           EigenDRef<MatrixXi> faces_in) {
@@ -158,12 +175,30 @@ void bindings(py::module &m) {
     Eigen::MatrixXd vertices_out;
     Eigen::MatrixXi faces_out;
     Eigen::VectorXi face_indices;
-    Eigen::VectorXi was_face_flipped; // TODO: unsure what this actually is. investigate
+    Eigen::VectorXi
+        was_face_flipped; // TODO: unsure what this actually is. investigate
     igl::copyleft::cgal::outer_hull(vertices, faces, vertices_out, faces_out,
                                     face_indices, was_face_flipped);
     return std::make_tuple(vertices_out, faces_out, face_indices,
                            was_face_flipped);
   });
+
+  m.def("bfs_orient", [](EigenDRef<MatrixXi> faces_in) {
+    Eigen::MatrixXi faces(faces_in);
+    Eigen::MatrixXi faces_out;
+    Eigen::VectorXi component_ids;
+    igl::bfs_orient(faces, faces_out, component_ids);
+    return std::make_tuple(faces_out, component_ids);
+  });
+
+  m.def("extract_cells",
+        [](EigenDRef<MatrixXd> vertices_in, EigenDRef<MatrixXi> faces_in) {
+          Eigen::MatrixXd vertices(vertices_in);
+          Eigen::MatrixXi faces(faces_in);
+          Eigen::MatrixXi cells;
+          igl::copyleft::cgal::extract_cells(vertices, faces, cells);
+          return cells;
+        });
 
   m.def("intersect_other",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
@@ -189,6 +224,7 @@ void bindings(py::module &m) {
     Eigen::VectorXi source_face_indices;
     Eigen::VectorXi unique_vertex_indices;
     igl::copyleft::cgal::RemeshSelfIntersectionsParam params;
+    // params.slow_and_more_precise_rounding = true;
     igl::copyleft::cgal::remesh_self_intersections(
         vertices, faces, params, vertices_out, faces_out,
         intersecting_face_pairs, source_face_indices, unique_vertex_indices);
