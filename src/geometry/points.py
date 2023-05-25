@@ -55,7 +55,12 @@ class Points(Array, Geometry):
 
     @property
     def aabb(self) -> AABB:
-        return AABB(self.min(axis=0), self.max(axis=0))
+        """Axis-aligned bounding box of the points."""
+        try:
+            return AABB(self.min(axis=0), self.max(axis=0))
+        except ValueError:
+            infs = np.full(self.dim, np.inf)
+            return AABB(-infs, infs)
 
     @property
     def obb(self):

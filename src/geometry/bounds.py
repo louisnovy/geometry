@@ -14,8 +14,10 @@ class AABB(Geometry):
             min, max = args
         except ValueError:
             min, max = args[0]
+
         self.min = Array(min)
         self.max = Array(max)
+
         if not self.min.shape == self.max.shape:
             raise ValueError("min and max must have the same shape")
 
@@ -34,6 +36,10 @@ class AABB(Geometry):
     @property
     def dim(self):
         return len(self.min)
+    
+    @property
+    def is_finite(self):
+        return np.all(np.isfinite(self.min)) and np.all(np.isfinite(self.max))
 
     @property
     def center(self):

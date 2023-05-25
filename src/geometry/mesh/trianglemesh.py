@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Iterable, Literal, Type
 from numpy.typing import ArrayLike
-from functools import cached_property
+from functools import cached_property, partial
 
 import numpy as np
 from numpy import isclose
@@ -17,6 +17,7 @@ from ..utils import unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
 from ..array import Array
 from ..cache import AttributeCache, cached_attribute
+from .. import sdf
 
 
 class TriangleMesh(Geometry):
@@ -107,7 +108,7 @@ class TriangleMesh(Geometry):
     def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
         # return self._edge_maps[0]
-        return self.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+        return self.faces[:, [1, 2, 2, 0, 0, 1]].reshape(-1, 2)
     
     @property
     def n_halfedges(self) -> int:
@@ -243,10 +244,25 @@ class TriangleMesh(Geometry):
 
     @cached_property
     def _winding_number_bvh(self):
+        if self.is_empty:
+            class EmptyWindingNumberBVH:
+                def query(self, queries, accuracy):
+                    return np.full(len(queries), -np.inf)
+            return EmptyWindingNumberBVH()
+
         return bindings.WindingNumberBVH(self.vertices, self.faces, 2)
     
     @cached_property
     def _aabbtree(self):
+        if self.is_empty:
+            class EmptyAABBTree:
+                def squared_distance(self, queries):
+                    sqdists = np.full(len(queries), np.inf)
+                    face_indices = np.full(len(queries), -1, dtype=np.int64)
+                    closest_points = np.full((len(queries), 3), np.inf)
+                    return sqdists, face_indices, closest_points
+            return EmptyAABBTree()
+        
         return bindings.AABBTree(self.vertices, self.faces)
 
     def winding_number(self, queries: ArrayLike) -> np.ndarray:
@@ -340,6 +356,10 @@ class TriangleMesh(Geometry):
             return out
 
         return dists
+    
+    @cached_property
+    def sdf(self):
+        return sdf.SDF(lambda q: self.distance(q, signed=True), self.aabb)
 
     def sample_surface(
         self,
@@ -554,16 +574,9 @@ class TriangleMesh(Geometry):
         if not all(isinstance(m, type(self)) for m in other):
             raise ValueError(f"Meshes must all be of the same type: {type(self)}")
 
-        i = 0
-        vertices = []
-        faces = []
-        for m in [self, *other]:
-            vertices.append(m.vertices)
-            faces.append(m.faces + i)
-            i += len(m.vertices)
-
-        vertices = np.concatenate(vertices)
-        faces = np.concatenate(faces)
+        summed = np.cumsum([0, *[len(m.vertices) for m in [self, *other]]])
+        vertices = np.concatenate([m.vertices for m in [self, *other]])
+        faces = np.concatenate([m.faces.data + summed[i] for i, m in enumerate([self, *other])])
 
         return type(self)(vertices, faces)
 
@@ -614,7 +627,6 @@ class TriangleMesh(Geometry):
             face_indices = np.setdiff1d(np.arange(self.n_faces), face_indices)
 
         return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
-
     
     def remove_unreferenced_vertices(self) -> TriangleMesh:
         """Remove vertices that are not referenced by any face. Faces are renumbered accordingly.
@@ -624,16 +636,17 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Mesh with unreferenced vertices removed.
         """
-        referenced = self.vertices.referenced
+        vertices, faces = self.vertices, self.faces
+        referenced = vertices.referenced
 
         if not referenced.all():
-            return type(self)(self.vertices[referenced], self.faces - (~referenced).cumsum()[self.faces])
-        
-        return type(self)(self.vertices, self.faces)
-        
+            vertices = vertices[referenced]
+            faces = np.cumsum(referenced)[faces] - 1
+
+        return type(self)(vertices, faces)
     
     # TODO: should be called merge_close_vertices?
-    def remove_duplicated_vertices(self, epsilon: float = 0) -> TriangleMesh:
+    def remove_duplicated_vertices(self, epsilon=0) -> TriangleMesh:
         """Remove duplicate vertices closer than rounding error 'epsilon'.
         
         Parameters
@@ -890,8 +903,7 @@ class TriangleMesh(Geometry):
         # cleaned = type(self)().concatenate(components)
         # cleaned = resolved.remove_unreferenced_vertices()
 
-        # cleaned = self.resolve_self_intersections()
-        cleaned = self.submesh(~self.faces.degenerated)
+        cleaned = self.resolve_self_intersections()
         labels = bindings.extract_cells(cleaned.vertices, cleaned.faces)
         n_components = labels.max() + 1
 
@@ -899,7 +911,7 @@ class TriangleMesh(Geometry):
         for i in range(n_components):
             if outer_only and len(out) > 0:
                 break
-            faces = cleaned.faces.copy()
+            faces = cleaned.faces.data.copy()
             faces[labels[:, 0] == i] = np.fliplr(faces[labels[:, 0] == i])
             # only keep faces that are part of this cell
             faces = faces[np.any(labels == i, axis=1)]
@@ -1125,26 +1137,26 @@ class TriangleMesh(Geometry):
 
         ps.init()
         ps.set_up_dir("z_up")
-        mesh = ps.register_surface_mesh("mesh", self.vertices, self.faces)
-        # mesh.add_color_quantity("vertex_colors", self.vertices.colors)
-        mesh.add_vector_quantity("vertex_normals", self.vertices.normals)
-        mesh.add_scalar_quantity("vertex_areas", self.vertices.areas)
-        mesh.add_scalar_quantity("vertex_voronoi_areas", self.vertices.voronoi_areas)
-        mesh.add_scalar_quantity("angle_defects", self.vertices.angle_defects)
-        mesh.add_vector_quantity("face_normals", self.faces.normals, defined_on="faces")
-        mesh.add_scalar_quantity("face_areas", self.faces.areas, defined_on="faces")
-        mesh.add_scalar_quantity("faces_obtuse", self.faces.obtuse, defined_on="faces")
-        mesh.add_scalar_quantity("faces_acute", self.faces.acute, defined_on="faces")
-        mesh.add_scalar_quantity("faces_right", self.faces.right, defined_on="faces")
-        mesh.add_scalar_quantity("faces_self_intersecting", self.faces.self_intersecting, defined_on="faces")
-        mesh.set_back_face_policy("custom")
+        mesh = ps.register_surface_mesh("mesh", self.vertices, self.faces.data)
+        # # mesh.add_color_quantity("vertex_colors", self.vertices.colors)
+        # mesh.add_vector_quantity("vertex_normals", self.vertices.normals)
+        # mesh.add_scalar_quantity("vertex_areas", self.vertices.areas)
+        # mesh.add_scalar_quantity("vertex_voronoi_areas", self.vertices.voronoi_areas)
+        # mesh.add_scalar_quantity("angle_defects", self.vertices.angle_defects)
+        # mesh.add_vector_quantity("face_normals", self.faces.normals, defined_on="faces")
+        # mesh.add_scalar_quantity("face_areas", self.faces.areas, defined_on="faces")
+        # mesh.add_scalar_quantity("faces_obtuse", self.faces.obtuse, defined_on="faces")
+        # mesh.add_scalar_quantity("faces_acute", self.faces.acute, defined_on="faces")
+        # mesh.add_scalar_quantity("faces_right", self.faces.right, defined_on="faces")
+        # mesh.add_scalar_quantity("faces_self_intersecting", self.faces.self_intersecting, defined_on="faces")
+        # mesh.set_back_face_policy("custom")
 
-        edges = ps.register_curve_network("edges", self.vertices, self.edges)
-        edges.add_scalar_quantity("vertex_valences", self.vertices.valences)
-        edges.add_scalar_quantity("edge_lengths", self.edges.lengths, defined_on="edges")
-        edges.add_vector_quantity("vertex_normals", self.vertices.normals)
-        edges.set_radius(0.001)
-        edges.set_enabled(False)
+        # edges = ps.register_curve_network("edges", self.vertices, self.edges)
+        # edges.add_scalar_quantity("vertex_valences", self.vertices.valences)
+        # edges.add_scalar_quantity("edge_lengths", self.edges.lengths, defined_on="edges")
+        # edges.add_vector_quantity("vertex_normals", self.vertices.normals)
+        # edges.set_radius(0.001)
+        # edges.set_enabled(False)
 
         ps.show()
     
@@ -1308,35 +1320,74 @@ class Vertices(Points):
         return np.cov(self, rowvar=False)
 
 
-class Faces(Array):
-    def __new__(
-        cls,
-        faces: ArrayLike | None = None,
+# class Faces(Array):
+#     def __new__(
+#         cls,
+#         faces: ArrayLike | None = None,
+#         mesh: TriangleMesh | None = None,
+#         attributes: dict | None = None,
+#     ):
+#         if faces is None:
+#             faces = np.empty((0, 3), dtype=np.int32)
+#         self = super().__new__(cls, faces, dtype=np.int32)
+#         self._mesh = mesh # type: ignore
+#         if self.shape[1] != 3:
+#             raise ValueError("Faces must be triangles.")
+#         self._attributes = AttributeCache(attributes) # type: ignore
+#         return self
+
+#     @property
+#     def mesh(self) -> TriangleMesh | None:
+#         """`TriangleMesh` : Parent mesh of this object."""
+#         return getattr(self, "_mesh", None)
+
+class Faces:
+    def __init__(
+        self,
+        data: ArrayLike | None = None,
         mesh: TriangleMesh | None = None,
         attributes: dict | None = None,
     ):
-        if faces is None:
-            faces = np.empty((0, 3), dtype=np.int32)
-        self = super().__new__(cls, faces, dtype=np.int32)
-        self._mesh = mesh # type: ignore
-        if self.shape[1] != 3:
+        if isinstance(data, type(self)):
+            data = data.data
+        if data is None:
+            data = np.empty((0, 3), dtype=np.int32)
+        self.data = np.asarray(data, dtype=np.int32)
+        self._mesh = mesh
+        if self.data.shape[1] != 3:
             raise ValueError("Faces must be triangles.")
-        self._attributes = AttributeCache(attributes) # type: ignore
-        return self
+        self._attributes = AttributeCache(attributes)
 
-    @property
-    def mesh(self) -> TriangleMesh | None:
-        """`TriangleMesh` : Parent mesh of this object."""
-        return getattr(self, "_mesh", None)
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self.data.__repr__()[6:-1]})"
+    
+    def __str__(self) -> str:
+        return self.data.__str__()
+
+    def __array__(self, dtype=None) -> np.ndarray:
+        return self.data if dtype is None else self.data.astype(dtype)
+    
+    def __len__(self) -> int:
+        return len(self.data)
     
     def __getitem__(self, key):
-        result = super().__getitem__(key)
+        result = self.data[key]
         if isinstance(result, type(self)):
-            # result._attributes = self._attributes.slice(key)
-            attributes = getattr(self, "_attributes", None)
-            if attributes is not None:
-                result._attributes = attributes.slice(key)
+            result._attributes = self._attributes.slice(key)
         return result
+    
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.data.shape
+    
+    # def __getitem__(self, key):
+    #     result = super().__getitem__(key)
+    #     if isinstance(result, type(self)):
+    #         # result._attributes = self._attributes.slice(key)
+    #         attributes = getattr(self, "_attributes", None)
+    #         if attributes is not None:
+    #             result._attributes = attributes.slice(key)
+    #     return result
 
     @cached_attribute
     def colors(self):
@@ -1351,7 +1402,7 @@ class Faces(Array):
 
         # TODO: we don't need to use the binding once we have the edge mappings working
         # this should actually speed things up a bit
-        return bindings.facet_adjacency_matrix(self.view(np.ndarray).copy())
+        return bindings.facet_adjacency_matrix(self.data)
 
     @cached_attribute
     def adjacency_list(self) -> list[np.ndarray]:
