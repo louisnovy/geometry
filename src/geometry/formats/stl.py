@@ -64,7 +64,7 @@ def load(path: str | Path):
         data = load_ascii(path)
     data = load_binary(path)
 
-    return mesh.TriangleMesh(*data).remove_duplicated_vertices()
+    return mesh.TriMesh(*data).remove_duplicated_vertices()
 
 
 def save(mesh, path: str | Path, ascii=False):

@@ -35,7 +35,7 @@ class SDF:
         try:
             name = self.func.__qualname__.split(".")[0]
         except AttributeError:
-            name = self.func.__name__
+            name = type(self.func).__name__
 
         return f"<{type(self).__name__}({name}) {self.aabb}>"
 

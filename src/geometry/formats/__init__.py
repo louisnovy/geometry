@@ -10,7 +10,7 @@ mesh_formats = [stl, off, obj, drc]
 # vertices/faces arrays instead of dealing with it here. this way a pointcloud can be requested
 # in the case of .ply for instance
 
-def load_mesh(path: str, format: str | None = None, **kwargs) -> mesh.TriangleMesh:
+def load_mesh(path: str, format: str | None = None, **kwargs) -> mesh.TriMesh:
     format = format or Path(path).suffix.lower()
     for loader in mesh_formats:
         if format in loader.extensions:
@@ -18,7 +18,7 @@ def load_mesh(path: str, format: str | None = None, **kwargs) -> mesh.TriangleMe
 
     raise ValueError(f"Unsupported mesh format: {format}")
 
-def save_mesh(mesh: mesh.TriangleMesh, path: str, format: str | None = None, **kwargs):
+def save_mesh(mesh: mesh.TriMesh, path: str, format: str | None = None, **kwargs):
     format = format or Path(path).suffix.lower()
     for saver in mesh_formats:
         if format in saver.extensions:

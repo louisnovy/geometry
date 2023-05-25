@@ -11,18 +11,18 @@ from pathlib import Path
 
 extensions = [".drc", ".draco"]
 
-def load(path: str | Path) -> mesh.TriangleMesh | points.Points:
+def load(path: str | Path) -> mesh.TriMesh | points.Points:
     with open(path, "rb") as f:        
         obj = DracoPy.decode(f.read())
         colors = obj.colors / 255 if obj.colors is not None else None
         attributes = dict(colors=colors) if colors is not None else None
         
         if hasattr(obj, "faces"):
-            return mesh.TriangleMesh(obj.points, obj.faces, vertex_attributes=attributes)
+            return mesh.TriMesh(obj.points, obj.faces, vertex_attributes=attributes)
 
         return points.Points(obj.points, attributes=attributes)
     
-def save(obj: mesh.TriangleMesh | points.Points, path: str | Path, **kwargs) -> None:
+def save(obj: mesh.TriMesh | points.Points, path: str | Path, **kwargs) -> None:
     with open(path, "wb") as f:
         # preserve order by default. allows referencing vertices by index after i/o
         if "preserve_order" not in kwargs:

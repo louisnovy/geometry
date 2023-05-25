@@ -44,6 +44,6 @@ def load(path: str):
 
     vertex_attributes = dict(colors=np.array(colors, dtype=float)) if colors else None
 
-    return mesh.TriangleMesh(vertices, faces, vertex_attributes=vertex_attributes)
+    return mesh.TriMesh(vertices, faces, vertex_attributes=vertex_attributes)
 
 

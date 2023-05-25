@@ -12,7 +12,7 @@ class SDT: # TODO: probably rename because this could be generalized
         self.voxsize = voxsize
         self.bounds = _bounds.AABB(bounds)
     
-    def triangulate(self, offset=0.0, *, allow_degenerate: bool = False) -> mesh.TriangleMesh:
+    def triangulate(self, offset=0.0, *, allow_degenerate: bool = False) -> mesh.TriMesh:
         from skimage.measure import marching_cubes
 
         vertices, faces, normals, values = marching_cubes(self.values, level=offset, allow_degenerate=allow_degenerate)
@@ -22,7 +22,7 @@ class SDT: # TODO: probably rename because this could be generalized
         hsv[:, 1] = 1.0
         hsv[:, 2] = 1.0
         # colors = Colors.from_hsv(hsv)
-        return mesh.TriangleMesh(vertices * self.voxsize + self.bounds.min, faces, vertex_attributes=dict(colors=colors, normals=normals))
+        return mesh.TriMesh(vertices * self.voxsize + self.bounds.min, faces, vertex_attributes=dict(colors=colors, normals=normals))
     
     def smooth(self, sigma=1, *, mode: str = 'constant', cval: float = 0.0) -> SDT:
         from scipy.ndimage import gaussian_filter
