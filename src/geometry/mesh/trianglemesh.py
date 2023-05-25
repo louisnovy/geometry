@@ -997,35 +997,6 @@ class TriangleMesh(Geometry):
             raise ValueError("Invalid boolean operation")
         
         return type(self)().concatenate([a, b]).remove_duplicated_vertices()
-    # def boolean(
-    #     self,
-    #     other: TriangleMesh,
-    #     operation: Literal["union", "intersection", "difference"],
-    #     clip: bool = False,
-    #     cull: bool = False,
-    # ):
-    #     if cull:
-    #         A = self
-    #         B = other
-    #         def _inside(mesh: TriangleMesh, other: TriangleMesh, invert=False):
-    #             # check all corners
-    #             inside = other.contains(mesh.faces.corners.reshape(-1, 3)).reshape(-1, 3)
-    #             # either all or none
-    #             return mesh.submesh(~np.any(inside, axis=1) if invert else np.all(inside, axis=1))
-    #     else:
-    #         both = self.concatenate(other)
-    #         vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(both.vertices, both.faces)
-    #         resolved = type(self)(vertices, faces)
-    #         A_faces = birth_faces < self.n_faces
-    #         A = resolved.submesh(A_faces)
-    #         B = resolved.submesh(~A_faces)
-    #         def _inside(mesh: TriangleMesh, other: TriangleMesh, invert=False):
-    #             inside = other.contains(mesh.faces.centroids)
-    #             indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
-    #             return mesh.submesh(indices)
-
-    #     if operation == "union":
-
     
     def union(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
         """Compute the union of two meshes.

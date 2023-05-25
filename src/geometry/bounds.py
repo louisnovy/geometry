@@ -83,6 +83,9 @@ class AABB(Geometry):
     
     def difference(self, other: AABB) -> AABB:
         return self.boolean(other, "difference")
+    
+    def translate(self, vector: ArrayLike) -> AABB:
+        return type(self)(self.min + vector, self.max + vector)
 
 
 class OBB:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 from typing import Callable
+from numpy.typing import ArrayLike
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,13 @@ class SDF:
         grid = np.stack(np.meshgrid(*grid, indexing="ij"), axis=-1).reshape(-1, self.dim)
 
         return tensor.SDT(self(grid).reshape(*shape), voxsize, bounds)
+    
+    def translate(self, vector: ArrayLike) -> SDF:
+        vector = np.asarray(vector)
+        def f(p):
+            return self(p - vector)
+
+        return type(self)(f, self.aabb.translate(vector))
 
     def offset(self, offset: float) -> SDF:
         def f(p):
