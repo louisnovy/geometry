@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Iterable, Literal, Type
 from numpy.typing import ArrayLike
-from functools import cached_property
+from functools import cached_property, partial
 
 import numpy as np
 from numpy import isclose
@@ -17,6 +17,7 @@ from ..utils import unique_rows, unitize
 from ..formats import load_mesh as load, save_mesh as save
 from ..array import Array
 from ..cache import AttributeCache, cached_attribute
+from .. import sdf
 
 
 class TriangleMesh(Geometry):
@@ -256,7 +257,7 @@ class TriangleMesh(Geometry):
             class EmptyAABBTree:
                 def squared_distance(self, queries):
                     sqdists = np.full(len(queries), np.inf)
-                    face_indices = np.full(len(queries), -1, dtype=np.int64)
+                    face_indices = np.full(len(queries), -1, dtype=np.int32)
                     closest_points = np.full((len(queries), 3), np.inf)
                     return sqdists, face_indices, closest_points
             return EmptyAABBTree()
@@ -295,7 +296,7 @@ class TriangleMesh(Geometry):
         """
         return self.winding_number(queries) > 0.5
 
-    def distance(
+    def _distance(
         self,
         queries: ArrayLike,
         squared=False,
@@ -303,33 +304,6 @@ class TriangleMesh(Geometry):
         return_index=False,
         return_closest=False,
     ):
-        """Compute the distance from each query point to closest point on the surface of the mesh.
-
-        Parameters
-        ----------
-        queries : `ArrayLike` (n_queries, dim)
-            Query points.
-        squared : `bool`, optional
-            If True, return squared distances.
-        signed : `bool`, optional
-            If True, distances inside the mesh will be negative.
-        return_face_index : `bool`, optional
-            If True, also return the index of the closest face for each query point.
-        return_closest : `bool`, optional
-            If True, also return the closest point on the surface of the mesh for each query point.
-
-        Returns
-        -------
-        `ndarray (n_queries,)`
-            Distance from each query point to the surface of the mesh.
-
-        Optionally returns:
-
-        `ndarray (n_queries,)` (optional)
-            Index of the closest face for each query point.
-        `Points (n_queries,)` (optional)
-            Closest point on the surface of the mesh for each query point.
-        """
         queries = np.asanyarray(queries, dtype=np.float64)
 
         # we could probably pass in flags to the C++ code, but this is a lot easier for now
@@ -354,6 +328,51 @@ class TriangleMesh(Geometry):
             return out
 
         return dists
+    
+    @cached_property
+    def distance(self):
+        """`SDF` of the distance from each query to the surface of the mesh.
+        
+        Parameters
+        ----------
+        queries : `ArrayLike` (n_queries, dim)
+            Query points.
+        squared : `bool`, optional
+            If True, return squared distances.
+        signed : `bool`, optional
+            If True, distances inside the mesh will be negative.
+        return_index : `bool`, optional
+            If True, also return the index of the closest face for each query point.
+        return_closest : `bool`, optional
+            If True, also return the closest point on the surface of the mesh for each query point.
+            
+        Returns
+        -------
+        `ndarray (n_queries,)`
+            Distance from each query point to the surface of the mesh.
+            
+        Optionally returns:
+
+        `ndarray (n_queries,)` (optional)
+            Index of the closest face for each query point.
+        `Points (n_queries,)` (optional)
+            Closest point on the surface of the mesh for each query point.
+        """
+        return sdf.SDF(self._distance, self.aabb)
+
+    @cached_property
+    def signed_distance(self):
+        """`SDF` of the signed distance from each query to the surface of the mesh.
+        This is an alias for `mesh.distance(signed=True)`.
+        """
+        return sdf.SDF(partial(self._distance, signed=True), self.aabb)
+    
+    @cached_property
+    def sdf(self):
+        """`SDF` of the signed distance from each query to the surface of the mesh.
+        This is an alias for `mesh.signed_distance`.
+        """
+        return self.signed_distance
 
     def sample_surface(
         self,

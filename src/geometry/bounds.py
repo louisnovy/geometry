@@ -65,12 +65,24 @@ class AABB(Geometry):
     def offset(self, offset) -> AABB:
         return type(self)(self.min - offset, self.max + offset)
     
+    def boolean(self, other: AABB, op: str) -> AABB:
+        if op == "union":
+            return type(self)(np.minimum(self.min, other.min), np.maximum(self.max, other.max))
+        elif op == "intersection":
+            return type(self)(np.maximum(self.min, other.min), np.minimum(self.max, other.max))
+        elif op == "difference":
+            return type(self)(self.min, self.max)
+        else:
+            raise ValueError(f"Invalid boolean operation: {op}")
+        
     def union(self, other: AABB) -> AABB:
-        return type(self)(np.minimum(self.min, other.min), np.maximum(self.max, other.max))
+        return self.boolean(other, "union")
+
     def intersection(self, other: AABB) -> AABB:
-        return type(self)(np.maximum(self.min, other.min), np.minimum(self.max, other.max))
+        return self.boolean(other, "intersection")
+    
     def difference(self, other: AABB) -> AABB:
-        return type(self)(self.min, self.max)
+        return self.boolean(other, "difference")
 
 
 class OBB:
