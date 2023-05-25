@@ -107,7 +107,7 @@ class TriangleMesh(Geometry):
     def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
         # return self._edge_maps[0]
-        return self.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+        return self.faces[:, [0, 2, 2, 1, 1, 0]].reshape(-1, 2)
     
     @property
     def n_halfedges(self) -> int:
@@ -236,17 +236,31 @@ class TriangleMesh(Geometry):
     @cached_property
     def is_convex(self) -> bool:
         """`bool` : True if the mesh is convex."""
-        oriented = np.all(np.einsum('ij,ij->i', self.faces.normals, self.faces.centroids - self.centroid) >= 0)
-        return oriented
+        raise NotImplementedError
 
     # *** Point queries ***
 
     @cached_property
     def _winding_number_bvh(self):
+        if self.is_empty:
+            class EmptyWindingNumberBVH:
+                def query(self, queries, accuracy):
+                    return np.full(len(queries), -np.inf)
+            return EmptyWindingNumberBVH()
+
         return bindings.WindingNumberBVH(self.vertices, self.faces, 2)
-    
+
     @cached_property
     def _aabbtree(self):
+        if self.is_empty:
+            class EmptyAABBTree:
+                def squared_distance(self, queries):
+                    sqdists = np.full(len(queries), np.inf)
+                    face_indices = np.full(len(queries), -1, dtype=np.int64)
+                    closest_points = np.full((len(queries), 3), np.inf)
+                    return sqdists, face_indices, closest_points
+            return EmptyAABBTree()
+
         return bindings.AABBTree(self.vertices, self.faces)
 
     def winding_number(self, queries: ArrayLike) -> np.ndarray:
