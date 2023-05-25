@@ -1,7 +1,7 @@
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractproperty
 
 class Geometry(ABC):
-    @abstractmethod
+    @abstractproperty
     def dim(self):
         """All geometry objects must be embeddable in some dimension."""
 
