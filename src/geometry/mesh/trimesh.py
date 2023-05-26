@@ -652,7 +652,6 @@ class TriMesh(Geometry):
             face_indices = np.setdiff1d(np.arange(self.n_faces), face_indices)
 
         return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
-
     
     def remove_unreferenced_vertices(self) -> TriMesh:
         """Remove vertices that are not referenced by any face. Faces are renumbered accordingly.
@@ -662,12 +661,26 @@ class TriMesh(Geometry):
         `TriangleMesh`
             Mesh with unreferenced vertices removed.
         """
-        referenced = self.vertices.referenced
+        # finding unique indices from faces suffers if the selection is large
+        # but won't scale with the size of the parent mesh meaning that we can
+        # very quickly create a lot of tiny subsets from a large mesh
+        # TODO: profiling these methods to find a reasonable cutoff?
+        # TODO: also just a better method
 
-        if not referenced.all():
-            return type(self)(self.vertices[referenced], self.faces - (~referenced).cumsum()[self.faces])
-        
-        return type(self)(self.vertices, self.faces)
+        if self.n_faces > 1e6:
+            referenced = self.vertices.referenced
+            if not referenced.all():
+                vertices = self.vertices[referenced]
+                faces = np.cumsum(referenced)[self.faces] - 1
+            else:
+                vertices, faces = self.vertices, self.faces
+
+        else:
+            unique, inverse = np.unique(self.faces, return_inverse=True)
+            vertices = self.vertices[unique]
+            faces = inverse.reshape(-1, 3)
+
+        return type(self)(vertices, faces)
         
     
     # TODO: should be called merge_close_vertices?
@@ -918,6 +931,7 @@ class TriMesh(Geometry):
         `list[TriangleMesh]`
             List of cell meshes.
         """
+        raise NotImplementedError
 
         # vertices, faces, intersecting_faces, birth_faces, unique_vertices = bindings.remesh_self_intersections(self.vertices, self.faces)
         # vertices = vertices[unique_vertices]
@@ -928,13 +942,13 @@ class TriMesh(Geometry):
         # cleaned = type(self)().concatenate(components)
         # cleaned = resolved.remove_unreferenced_vertices()
 
-        # cleaned = self.resolve_self_intersections()
-        cleaned = self.submesh(~self.faces.degenerated)
+        cleaned = self.resolve_self_intersections()
+        # cleaned = self.submesh(~self.faces.degenerated)
         labels = bindings.extract_cells(cleaned.vertices, cleaned.faces)
         n_components = labels.max() + 1
 
         out = []
-        for i in range(n_components):
+        for i in range(1, n_components):
             if outer_only and len(out) > 0:
                 break
             faces = cleaned.faces.copy()
@@ -1081,59 +1095,6 @@ class TriMesh(Geometry):
 
     def __hash__(self) -> int:
         return hash((self.vertices, self.faces))
-    
-    # def plot(self, fig=None, show=False, opacity=1, **kwargs):
-    #     if self.dim == 2:
-    #         import matplotlib.pyplot as plt
-    #         ax = plt.gca()
-    #         ax.set_aspect('equal')
-    #         triangles = self.faces.corners
-    #         for triangle in triangles:
-    #             ax.fill(triangle[:, 0], triangle[:, 1], **kwargs)
-    #         if show: plt.tight_layout(); plt.show()
-    #         return ax
-
-    #     from plotly import graph_objects as go
-    #     fig = go.Figure() if fig is None else fig
-    #     m = self
-    #     fig.add_trace(
-    #         go.Mesh3d(
-    #             x=m.vertices[:, 0],
-    #             y=m.vertices[:, 1],
-    #             z=m.vertices[:, 2],
-    #             i=m.faces[:, 0],
-    #             j=m.faces[:, 1],
-    #             k=m.faces[:, 2],
-    #             flatshading=True,
-    #             opacity=opacity,
-    #             # lighting=dict(ambient=0.8, diffuse=0.5, fresnel=0.1, specular=0.8, roughness=0.0),
-    #             facecolor=m.faces.colors,
-    #             vertexcolor=m.vertices.colors,
-    #         )
-    #     )
-    #     props = {
-    #         # m.faces.circumcenters: "yellow",
-    #         # m.faces.incenters: "orange",
-    #         # m.faces.orthocenters: "purple",
-    #         # m.faces.centroids: "blue",
-    #         # m.edges.midpoints: "green"
-    #     }
-    #     for prop, color in props.items():
-    #         fig.add_trace(
-    #             go.Scatter3d(
-    #                 x=prop[:, 0],
-    #                 y=prop[:, 1],
-    #                 z=prop[:, 2],
-    #                 mode="markers",
-    #                 marker=dict(size=2, color=color),
-    #             )
-    #         )
-
-    #     fig.update_layout(scene=dict(aspectmode='data'))
-    #     fig.show() if show else None
-    
-    # def show(self, **kwargs):
-    #     self.plot(show=True, **kwargs)
 
     def show(self, properties=True):
         import polyscope as ps
@@ -1141,6 +1102,7 @@ class TriMesh(Geometry):
         ps.init()
         ps.set_up_dir("z_up")
         mesh = ps.register_surface_mesh("mesh", self.vertices, self.faces)
+        mesh.set_back_face_policy("custom")
         if not properties:
             ps.show()
             return
@@ -1155,7 +1117,6 @@ class TriMesh(Geometry):
         mesh.add_scalar_quantity("faces_acute", self.faces.acute, defined_on="faces")
         mesh.add_scalar_quantity("faces_right", self.faces.right, defined_on="faces")
         mesh.add_scalar_quantity("faces_self_intersecting", self.faces.self_intersecting, defined_on="faces")
-        mesh.set_back_face_policy("custom")
 
         edges = ps.register_curve_network("edges", self.vertices, self.edges)
         edges.add_scalar_quantity("vertex_valences", self.vertices.valences)
@@ -1179,15 +1140,6 @@ class Vertices(Points):
         self = super().__new__(cls, vertices, attributes, dtype=np.float64)
         self._mesh = mesh # type: ignore
         return self
-
-    @property
-    def mesh(self) -> TriMesh | None:
-        """`TriangleMesh` : Parent mesh of this object."""
-        return getattr(self, "_mesh", None)
-
-    def __array_finalize__(self, obj):
-        if obj is None: return
-        self._mesh = getattr(obj, '_mesh', None)
 
     @cached_attribute
     def adjacency_matrix(self) -> csr_array:
@@ -1322,7 +1274,7 @@ class Vertices(Points):
     
     @cached_attribute
     def covariance(self) -> np.ndarray:
-        """`ndarray (3, 3)` : Covariance matrix of the vertices."""
+        """`ndarray (3, 3)` : Covariance for vertex positions."""
         return np.cov(self, rowvar=False)
 
 
@@ -1341,24 +1293,6 @@ class Faces(Array):
             raise ValueError("Faces must be triangles.")
         self._attributes = AttributeCache(attributes) # type: ignore
         return self
-
-    @property
-    def mesh(self) -> TriMesh | None:
-        """`TriangleMesh` : Parent mesh of this object."""
-        return getattr(self, "_mesh", None)
-    
-    def __getitem__(self, key):
-        result = super().__getitem__(key)
-        if isinstance(result, type(self)):
-            # result._attributes = self._attributes.slice(key)
-            attributes = getattr(self, "_attributes", None)
-            if attributes is not None:
-                result._attributes = attributes.slice(key)
-        return result
-
-    @cached_attribute
-    def colors(self):
-        return None
     
     @cached_attribute
     def adjacency_matrix(self) -> csr_array:
@@ -1366,7 +1300,6 @@ class Faces(Array):
 
         Square matrix where each row and column corresponds to a face.
         """
-
         # TODO: we don't need to use the binding once we have the edge mappings working
         # this should actually speed things up a bit
         return bindings.facet_adjacency_matrix(self.view(np.ndarray).copy())
@@ -1554,7 +1487,8 @@ class Faces(Array):
         r[np.isnan(r)] = 0
         return r
 
-    
+
+# TODO: dire need of refactor
 class Edges(Array):
     def __new__(
         cls: Type[Edges],
@@ -1566,10 +1500,6 @@ class Edges(Array):
         self = super().__new__(cls, edges, dtype=np.int32)
         self._mesh = mesh
         return self
-    
-    @cached_property
-    def _mesh(self) -> TriMesh:
-        raise AttributeError("Not attached to a mesh.")
 
     def __array_finalize__(self, obj):
         if obj is None: return
