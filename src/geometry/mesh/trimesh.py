@@ -212,7 +212,7 @@ class TriMesh(Geometry):
     def is_vertex_manifold(self) -> bool:
         """`bool` : True if all vertices are shared by exactly one or two faces."""
         if self.n_faces == 0: return False
-        return bool(np.all(bindings.is_vertex_manifold(self.faces)))
+        return bool(np.all(bindings.is_vertex_manifold(self.faces)) and np.all(self.vertices.referenced))
     
     @cached_property
     def is_manifold(self) -> bool:
@@ -278,6 +278,9 @@ class TriMesh(Geometry):
             Winding number at each query point.        
         """
         queries = np.asanyarray(queries, dtype=np.float64)
+        if not queries.ndim == 2:
+            raise ValueError("`queries` must be a 2D array.")
+        
         return self._winding_number_bvh.query(queries, 2.3)
         # return bindings.generalized_winding_number(self.vertices, self.faces, queries)
 
@@ -305,6 +308,8 @@ class TriMesh(Geometry):
         return_closest=False,
     ):
         queries = np.asanyarray(queries, dtype=np.float64)
+        if not queries.ndim == 2:
+            raise ValueError("`queries` must be a 2D array.")
 
         # we could probably pass in flags to the C++ code, but this is a lot easier for now
         # and is probably not actually degrading performance that much. the results of this
@@ -381,7 +386,7 @@ class TriMesh(Geometry):
         barycentric_weights = (1, 1, 1),
         face_weights = None,
         seed: int | None = None,
-    ) -> Points | tuple[Points, np.ndarray]:
+    ) -> Points | tuple[Points, Array]:
         """Sample points on the surface of the mesh.
         
         Parameters
@@ -432,7 +437,7 @@ class TriMesh(Geometry):
         else:
             colors = None
         points = Points(samples, attributes=dict(colors=colors))
-        return (points, face_indices) if return_index else points
+        return (points, Array(face_indices)) if return_index else points
     
     # *** Transformations ***
 
