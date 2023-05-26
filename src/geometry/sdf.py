@@ -9,6 +9,7 @@ import numpy as np
 import sys
 
 from . import tensor, bounds as _bounds  # TODO: did not forsee this conflict oops
+from .utils import unique_rows
 
 # TODO: bounds calculations are just approximations for many ops here. things like offset
 # and smooth will not be accurate. for booleans we should probably actually boolean some boxes or something
@@ -157,6 +158,7 @@ import itertools
 import numpy as np
 import time
 from tqdm import tqdm, trange
+from multiprocessing.pool import ThreadPool
 
 from . import progress
 
@@ -279,19 +281,6 @@ def generate(
     bar = progress.Bar(num_batches, enabled=verbose)
     f = partial(_worker, sdf, sparse=sparse)
 
-    # for batch in batches:
-    #     result = f(batch)
-    #     bar.increment(1)
-    #     if result is None:
-    #         skipped += 1
-    #     elif len(result) == 0:
-    #         empty += 1
-    #     else:
-    #         nonempty += 1
-    #         points.extend(result)
-    # bar.done()
-
-    from multiprocessing.pool import ThreadPool
     pool = ThreadPool(workers)
     for result in pool.imap_unordered(f, batches):
         bar.increment(1)
@@ -310,8 +299,6 @@ def generate(
         seconds = time.time() - start
         print('%d triangles in %g seconds' % (triangles, seconds))
 
-    # return points
-
-    points, cells = np.unique(points, axis=0, return_inverse=True)
+    points, cells = unique_rows(points, return_inverse=True)
     cells = cells.reshape((-1, 3))
     return np.asarray(points), cells
