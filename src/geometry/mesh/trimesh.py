@@ -1135,12 +1135,15 @@ class TriMesh(Geometry):
     # def show(self, **kwargs):
     #     self.plot(show=True, **kwargs)
 
-    def show(self):
+    def show(self, properties=True):
         import polyscope as ps
 
         ps.init()
         ps.set_up_dir("z_up")
         mesh = ps.register_surface_mesh("mesh", self.vertices, self.faces)
+        if not properties:
+            ps.show()
+            return
         # mesh.add_color_quantity("vertex_colors", self.vertices.colors)
         mesh.add_vector_quantity("vertex_normals", self.vertices.normals)
         mesh.add_scalar_quantity("vertex_areas", self.vertices.areas)
