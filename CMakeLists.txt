@@ -11,7 +11,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(LIBIGL_COPYLEFT_CGAL "Use CGAL" ON)
 include(libigl)
 
-add_subdirectory(./ext/pybind11)
+include(pybind11)
 pybind11_add_module(
     _geometry
     ./src/bindings/igl.cpp
