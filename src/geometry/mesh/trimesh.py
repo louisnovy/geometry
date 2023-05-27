@@ -231,8 +231,8 @@ class TriMesh(Geometry):
 
     @cached_property
     def is_watertight(self) -> bool:
-        """`bool` : True if the mesh is a closed, oriented surface with no self-intersections."""
-        return self.is_closed and self.is_oriented and not self.is_self_intersecting
+        """`bool` : True if the mesh is a manifold, closed, oriented surface with no self-intersections."""
+        return self.is_manifold and self.is_closed and self.is_oriented and not self.is_self_intersecting
     
     @cached_property
     def is_convex(self) -> bool:
