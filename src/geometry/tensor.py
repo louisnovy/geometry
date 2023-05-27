@@ -16,20 +16,15 @@ class SDT: # TODO: probably rename because this could be generalized
         from skimage.measure import marching_cubes
 
         vertices, faces, normals, values = marching_cubes(self.values, level=offset, allow_degenerate=allow_degenerate)
-        values = (values - values.min()) / (values.max() - values.min())
-        hsv = np.zeros((len(values), 3))
-        hsv[:, 0] = values
-        hsv[:, 1] = 1.0
-        hsv[:, 2] = 1.0
-        # colors = Colors.from_hsv(hsv)
-        return mesh.TriMesh(vertices * self.voxsize + self.bounds.min, faces, vertex_attributes=dict(colors=colors, normals=normals))
+        # values = (values - values.min()) / (values.max() - values.min())
+        # hsv = np.zeros((len(values), 3))
+        # hsv[:, 0] = values
+        # hsv[:, 1] = 1.0
+        # hsv[:, 2] = 1.0
+        # # colors = Colors.from_hsv(hsv)
+        return mesh.TriMesh(vertices * self.voxsize + self.bounds.min, faces, vertex_attributes=dict(normals=normals))
     
-    def smooth(self, sigma=1, *, mode: str = 'constant', cval: float = 0.0) -> SDT:
-        from scipy.ndimage import gaussian_filter
-
-        return type(self)(gaussian_filter(self.values, sigma=sigma, mode=mode, cval=cval), self.voxsize, self.bounds)
-    
-    def radius(self, radius: float, *, mode: str = 'constant', cval: float = 0.0) -> SDT:
+    def radius(self, radius: float, *, mode: str = "reflect", cval: float = 0.0) -> SDT:
         from scipy.ndimage import convolve
 
         r = radius / self.voxsize
@@ -39,3 +34,8 @@ class SDT: # TODO: probably rename because this could be generalized
         kernel = np.where(kernel <= r, 1.0, 0.0)
         kernel /= np.sum(kernel)
         return type(self)(convolve(self.values, kernel, mode=mode, cval=cval), self.voxsize, self.bounds)
+    
+    def smooth(self, sigma=1, *, mode: str = 'reflect', cval: float = 0.0) -> SDT:
+        from scipy.ndimage import gaussian_filter
+
+        return type(self)(gaussian_filter(self.values, sigma=sigma, mode=mode, cval=cval), self.voxsize, self.bounds)

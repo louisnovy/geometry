@@ -231,8 +231,8 @@ class TriMesh(Geometry):
 
     @cached_property
     def is_watertight(self) -> bool:
-        """`bool` : True if the mesh is a closed, oriented, manifold surface with no self-intersections."""
-        return self.is_closed and self.is_oriented and self.is_manifold and not self.is_self_intersecting
+        """`bool` : True if the mesh is a closed, oriented surface with no self-intersections."""
+        return self.is_closed and self.is_oriented and not self.is_self_intersecting
     
     @cached_property
     def is_convex(self) -> bool:
@@ -281,10 +281,12 @@ class TriMesh(Geometry):
         if not queries.ndim == 2:
             raise ValueError("`queries` must be a 2D array.")
         
+        # if exact:
+        #     return bindings.generalized_winding_number(self.vertices, self.faces, queries)
+        
         return self._winding_number_bvh.query(queries, 2.3)
-        # return bindings.generalized_winding_number(self.vertices, self.faces, queries)
 
-    def contains(self, queries: ArrayLike) -> np.ndarray:
+    def contains(self, queries: ArrayLike, exact=False) -> np.ndarray:
         """Check if each query point is inside the mesh.
 
         Parameters
@@ -478,7 +480,7 @@ class TriMesh(Geometry):
             raise ValueError(f"Vector must have shape {(self.dim,)}")
         return type(self)(self.vertices + vector, self.faces)
     
-    def scale(self, factor: float | ArrayLike, center: ArrayLike = (0,0,0)) -> TriMesh:
+    def scale(self, factor: float | ArrayLike, center: ArrayLike | None = None) -> TriMesh:
         """Scale by the given factor.
 
         Parameters
@@ -498,11 +500,16 @@ class TriMesh(Geometry):
         if factor.shape == ():
             factor = np.full(self.dim, factor, dtype=np.float64)
 
-        center = np.asanyarray(center, dtype=np.float64)
-        if center.shape != (self.dim,):
-            raise ValueError(f"Center does not match mesh dimension {self.dim}")
+        if center is not None:
+            center = np.asanyarray(center, dtype=np.float64)
+            if center.shape != (self.dim,):
+                raise ValueError(f"Center does not match mesh dimension {self.dim}")
+            vertices = (self.vertices - center) * factor + center
+        else:
+            vertices = self.vertices * factor
 
-        return type(self)((self.vertices - center) * factor + center, self.faces)
+        return type(self)(vertices, self.faces)
+        
 
     # TODO: we shouldn't be building the matrix here
     # TODO: support 2d
@@ -661,12 +668,8 @@ class TriMesh(Geometry):
         `TriangleMesh`
             Mesh with unreferenced vertices removed.
         """
-        # finding unique indices from faces suffers if the selection is large
-        # but won't scale with the size of the parent mesh meaning that we can
-        # very quickly create a lot of tiny subsets from a large mesh
         # TODO: profiling these methods to find a reasonable cutoff?
         # TODO: also just a better method
-
         if self.n_faces > 1e6:
             referenced = self.vertices.referenced
             if not referenced.all():
@@ -676,6 +679,10 @@ class TriMesh(Geometry):
                 vertices, faces = self.vertices, self.faces
 
         else:
+            # finding unique indices from faces suffers if numbers of faces is large but 
+            # won't scale with the number of vertices meaning that we can quickly submesh a
+            # small selection from a large mesh without creating a referenced array for every
+            # vertex like above
             unique, inverse = np.unique(self.faces, return_inverse=True)
             vertices = self.vertices[unique]
             faces = inverse.reshape(-1, 3)
@@ -699,9 +706,8 @@ class TriMesh(Geometry):
 
         Notes
         -----
-        This will NOT remove faces and only renumbers the indices creating
+        This will NOT remove faces and only renumbers them creating
         duplicate and degenerate faces if epsilon is not kept in check.
-        This operation is used mainly for snapping together triangles.
         """
         vertices, faces = self.vertices, self.faces
 
@@ -853,7 +859,7 @@ class TriMesh(Geometry):
         """
         return convex_hull(self, joggle_on_failure=joggle_on_failure)
 
-    def separate(self, connectivity: Literal["vertex", "face"] = "face") -> list[TriMesh]:
+    def separate(self, connectivity: Literal["face", "vertex"] = "face") -> list[TriMesh]:
         """Return a list of meshes, each representing a connected component of the mesh.
         
         Parameters
@@ -873,13 +879,13 @@ class TriMesh(Geometry):
         STL file will result in new connectivity if vertices are too close or duplicated.
         """
 
-        if connectivity == "vertex":
+        if connectivity == "face":
+            adjacency = self.faces.adjacency_matrix
+            get_indices = lambda i: i == labels
+        elif connectivity == "vertex":
             adjacency = self.vertices.adjacency_matrix
             # at least one vertex in common
             get_indices = lambda i: np.any(i == labels[self.faces], axis=1)
-        elif connectivity == "face":
-            adjacency = self.faces.adjacency_matrix
-            get_indices = lambda i: i == labels
         else:
             raise ValueError(f"Unknown connectivity method: {connectivity}")
         
@@ -989,11 +995,11 @@ class TriMesh(Geometry):
                 return mesh.submesh(~np.any(inside, axis=1) if invert else np.all(inside, axis=1))
         else:
             both = self.concatenate(other)
-            vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(both.vertices, both.faces)
+            vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(both.vertices, both.faces, stitch_all=True)
             resolved = type(self)(vertices, faces)
-            A_faces = birth_faces < self.n_faces
-            A = resolved.submesh(A_faces)
-            B = resolved.submesh(~A_faces)
+            a_faces = birth_faces < self.n_faces
+            A = resolved.submesh(a_faces)
+            B = resolved.submesh(~a_faces)
             def inside(mesh: TriMesh, other: TriMesh, invert=False):
                 inside = other.contains(mesh.faces.centroids)
                 indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
@@ -1274,7 +1280,7 @@ class Vertices(Points):
     
     @cached_attribute
     def covariance(self) -> np.ndarray:
-        """`ndarray (3, 3)` : Covariance for vertex positions."""
+        """`ndarray (dim, dim)` : Covariance matrix of the vertices."""
         return np.cov(self, rowvar=False)
 
 
@@ -1328,7 +1334,7 @@ class Faces(Array):
         # complement angle so we can take a shortcut
         res[:, 2] = np.pi - res[:, 0] - res[:, 1]
         return res
-    
+
     @cached_attribute
     def cotangents(self):
         """`ndarray (n, 3)` : Cotangents of each internal angle."""
@@ -1339,7 +1345,7 @@ class Faces(Array):
 
     @cached_attribute
     def centroids(self) -> Points:
-        """`Points (n, 3)` : Centroid of each face."""
+        """`Points (n, dim)` : Centroid of each face."""
         return Points(self.corners.mean(axis=1))
 
     @cached_attribute
@@ -1359,39 +1365,38 @@ class Faces(Array):
     @cached_attribute
     def areas(self) -> np.ndarray:
         """`ndarray (n,)` : Area of each face."""
-        return self.double_areas / 2
+        return self.double_areas * 0.5
 
     @cached_attribute
     def voronoi_areas(self) -> np.ndarray:
         """`ndarray (n, 3)` : Voronoi area of each corner of each face."""
-        v0, v1, v2 = np.rollaxis(self.corners, 1)
-        e0, e1, e2 = v2 - v1, v0 - v2, v1 - v0
-        # TODO: general sloppy code here. we can index in a loop
-        # TODO: we are losing more precision than i would like...
-        # TODO: also we could factor out cots as a separate method
-        double_area = self.double_areas
-        with np.errstate(divide="ignore", invalid="ignore"):
-            cot_0 = np.einsum("ij,ij->i", e2, -e1) / double_area
-            cot_1 = np.einsum("ij,ij->i", e0, -e2) / double_area
-            cot_2 = np.einsum("ij,ij->i", e1, -e0) / double_area
-            sq_l0, sq_l1, sq_l2 = (
-                norm(e0, axis=1) ** 2,
-                norm(e1, axis=1) ** 2,
-                norm(e2, axis=1) ** 2,
-            )
-            voronoi_areas = np.zeros((len(self), 3), dtype=np.float64)
-            voronoi_areas[:, 0] = sq_l1 * cot_1 + sq_l2 * cot_2
-            voronoi_areas[:, 1] = sq_l0 * cot_0 + sq_l2 * cot_2
-            voronoi_areas[:, 2] = sq_l1 * cot_1 + sq_l0 * cot_0
-            voronoi_areas /= 8.0
-        mask0 = cot_0 < 0.0
-        mask1 = cot_1 < 0.0
-        mask2 = cot_2 < 0.0
-        voronoi_areas[mask0] = (np.array([0.5, 0.25, 0.25])[None, :] * double_area[mask0, None] * 0.5)
-        voronoi_areas[mask1] = (np.array([0.25, 0.5, 0.25])[None, :] * double_area[mask1, None] * 0.5)
-        voronoi_areas[mask2] = (np.array([0.25, 0.25, 0.5])[None, :] * double_area[mask2, None] * 0.5)
-        voronoi_areas[self.degenerated] = 0.0
-        return voronoi_areas
+        sq_el = self.edge_lengths_squared
+        cot = self.cotangents
+        areas = self.areas
+        num_faces = len(self)
+
+        res = np.zeros((num_faces, 3), dtype=np.float64)
+
+        for i in range(3):
+            # the other two edges
+            a = (i + 1) % 3
+            b = (i + 2) % 3
+            # sum of squared edge lengths times cotangents
+            sum_a = sq_el[:, a] * cot[:, a]
+            sum_b = sq_el[:, b] * cot[:, b]
+            # this portion of the area is 1/8 of the sum
+            res[:, i] = 0.125 * (sum_a + sum_b)
+
+        weights = np.array([[0.5, 0.25, 0.25],
+                            [0.25, 0.5, 0.25],
+                            [0.25, 0.25, 0.5]])
+
+        for i in range(3):
+            mask = cot[:, i] < 0.0
+            res[mask] = (weights[i][None, :] * areas[mask, None])
+
+        res[self.degenerated] = 0.0
+        return res
 
     @cached_attribute
     def degenerated(self) -> np.ndarray:
@@ -1402,7 +1407,8 @@ class Faces(Array):
     @cached_attribute
     def self_intersecting(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face is self-intersecting."""
-        intersecting_face_indices = bindings.self_intersecting_faces(self._mesh.vertices, self)
+        vertices = self._mesh.vertices
+        intersecting_face_indices = bindings.self_intersecting_faces(vertices, self)
         return np.isin(np.arange(len(self)), intersecting_face_indices)
 
     @cached_attribute
@@ -1422,16 +1428,16 @@ class Faces(Array):
         return np.isin(self, edges[edges.boundaries]).any(axis=1)
 
     @cached_attribute
-    def edge_lengths(self) -> np.ndarray:
-        """`ndarray (n, 3)` : Length of each edge of each face."""
-        v0, v1, v2 = np.rollaxis(self.corners, 1)
-        return np.array([norm(v1 - v0, axis=1), norm(v2 - v1, axis=1), norm(v0 - v2, axis=1)]).T
-
-    @cached_attribute
     def edge_lengths_squared(self) -> np.ndarray:
         """`ndarray (n, 3)` : Squared length of each edge of each face."""
-        a, b, c = self.edge_lengths.T
-        return np.array([a**2, b**2, c**2]).T
+        v0, v1, v2 = np.rollaxis(self.corners, 1)
+        squared_norm = lambda v: np.einsum("ij,ij->i", v, v)
+        return np.array([squared_norm(v1 - v2), squared_norm(v2 - v0), squared_norm(v0 - v1)]).T
+
+    @cached_attribute
+    def edge_lengths(self) -> np.ndarray:
+        """`ndarray (n, 3)` : Length of each edge of each face."""
+        return np.sqrt(self.edge_lengths_squared)
 
     @cached_attribute
     def obtuse(self) -> np.ndarray:
@@ -1523,21 +1529,23 @@ class Edges(Array):
             raise ValueError("Edges must be an (n, 2) array")
 
     @cached_attribute
-    def lengths(self):
-        """(n_edges,) array of edge lengths."""
-        return norm(self._mesh.vertices[self[:, 0]] - self._mesh.vertices[self[:, 1]], axis=1)
-
-    @cached_attribute
     def lengths_squared(self):
         """(n_edges,) array of squared edge lengths."""
-        return self.lengths**2
+        # return self.lengths**2
+        vertices = self._mesh.vertices
+        a, b = vertices[self[:, 0]], vertices[self[:, 1]]
+        return np.einsum("ij,ij->i", a - b, a - b)
+    
+    @cached_attribute
+    def lengths(self):
+        """(n_edges,) array of edge lengths."""
+        return np.sqrt(self.lengths_squared)
 
     @cached_attribute
     def midpoints(self):
         """`Points` of the midpoints of each edge."""
-        return Points((self._mesh.vertices[self[:, 0]] + self._mesh.vertices[self[:, 1]]) / 2)
-
-
+        vertices = self._mesh.vertices
+        return Points((vertices[self[:, 0]] + vertices[self[:, 1]]) / 2)
 
 
 def convex_hull(

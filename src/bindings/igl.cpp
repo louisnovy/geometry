@@ -151,7 +151,12 @@ void bindings(py::module &m) {
         verticesA, facesA, verticesB, facesB, resolve_overlaps, 
         vertices_out, faces_out, source_face_index);
     return std::make_tuple(vertices_out, faces_out, source_face_index);
-  });
+  },
+  py::arg("verticesA"),
+  py::arg("facesA"),
+  py::arg("verticesB"),
+  py::arg("facesB"),
+  py::arg("resolve_overlaps") = true);
 
   m.def("point_mesh_squared_distance", [](EigenDRef<MatrixXd> points_in,
                                           EigenDRef<MatrixXd> vertices_in,
@@ -215,7 +220,11 @@ void bindings(py::module &m) {
         });
 
   m.def("remesh_self_intersections", [](EigenDRef<MatrixXd> vertices_in,
-                                        EigenDRef<MatrixXi> faces_in) {
+                                        EigenDRef<MatrixXi> faces_in,
+                                        bool detect_only,
+                                        bool first_only,
+                                        bool stitch_all,
+                                        bool slow_and_more_precise_rounding) {
     Eigen::MatrixXd vertices(vertices_in);
     Eigen::MatrixXi faces(faces_in);
     Eigen::MatrixXd vertices_out;
@@ -224,13 +233,22 @@ void bindings(py::module &m) {
     Eigen::VectorXi source_face_indices;
     Eigen::VectorXi unique_vertex_indices;
     igl::copyleft::cgal::RemeshSelfIntersectionsParam params;
-    // params.slow_and_more_precise_rounding = true;
+    params.detect_only = detect_only;
+    params.first_only = first_only;
+    params.stitch_all = stitch_all;
+    params.slow_and_more_precise_rounding = slow_and_more_precise_rounding;
     igl::copyleft::cgal::remesh_self_intersections(
         vertices, faces, params, vertices_out, faces_out,
         intersecting_face_pairs, source_face_indices, unique_vertex_indices);
     return std::make_tuple(vertices_out, faces_out, intersecting_face_pairs,
                            source_face_indices, unique_vertex_indices);
-  });
+  },
+  py::arg("vertices"),
+  py::arg("faces"),
+  py::arg("detect_only") = false,
+  py::arg("first_only") = false,
+  py::arg("stitch_all") = false,
+  py::arg("slow_and_more_precise_rounding") = false);
 
   m.def("is_vertex_manifold", [](EigenDRef<MatrixXi> faces_in) {
     Eigen::MatrixXi faces(faces_in);
