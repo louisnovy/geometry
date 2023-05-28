@@ -264,7 +264,7 @@ class TriMesh(Geometry):
 
         return bindings.AABBTree(self.vertices, self.faces)
 
-    def winding_number(self, queries: ArrayLike) -> np.ndarray:
+    def winding_number(self, queries: ArrayLike, exact=False) -> np.ndarray:
         """Compute the winding number at each query point with respect to the mesh.
 
         Parameters
@@ -281,8 +281,8 @@ class TriMesh(Geometry):
         if not queries.ndim == 2:
             raise ValueError("`queries` must be a 2D array.")
         
-        # if exact:
-        #     return bindings.generalized_winding_number(self.vertices, self.faces, queries)
+        if exact:
+            return bindings.generalized_winding_number(self.vertices, self.faces, queries)
         
         return self._winding_number_bvh.query(queries, 2.3)
 
@@ -299,7 +299,7 @@ class TriMesh(Geometry):
         `ndarray (n_queries,)`
             True if the query point is inside the mesh.
         """
-        return self.winding_number(queries) > 0.5
+        return self.winding_number(queries, exact=exact) > 0.5
 
     def _distance(
         self,
@@ -570,13 +570,14 @@ class TriMesh(Geometry):
         """
         return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
     
-    def flip_normals(self) -> TriMesh:
-        """Flip the normals of the mesh by reversing the order of the vertices in each face.
+    def invert(self) -> TriMesh:
+        """Invert the mesh by reversing the order of the vertices in each face causing
+        the normals to point in the opposite direction.
 
         Returns
         -------
         `TriangleMesh`
-            Mesh with flipped normals.
+            Inverted mesh.
         """
         return type(self)(self.vertices, self.faces[:, ::-1])
 
@@ -1001,8 +1002,9 @@ class TriMesh(Geometry):
             A = resolved.submesh(a_faces)
             B = resolved.submesh(~a_faces)
             def inside(mesh: TriMesh, other: TriMesh, invert=False):
-                inside = other.contains(mesh.faces.centroids)
-                indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
+                inside = other.contains(mesh.faces.centroids, exact=True)
+                # indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
+                indices = (inside if not invert else ~inside)
                 return mesh.submesh(indices)
 
         if operation == "union":
@@ -1023,7 +1025,7 @@ class TriMesh(Geometry):
             if clip:
                 return a
             # invert because B surface is now part of A
-            b = inside(B, A).flip_normals()
+            b = inside(B, A).invert()
         else:
             raise ValueError("Invalid boolean operation")
         
