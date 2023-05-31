@@ -214,6 +214,8 @@ void bindings(py::module &m) {
           Eigen::MatrixXd verticesB(verticesB_in);
           Eigen::MatrixXi facesB(facesB_in);
           igl::copyleft::cgal::RemeshSelfIntersectionsParam params;
+          params.detect_only = detect_only;
+          params.first_only = first_only;
           Eigen::MatrixXi intersecting_face_pairs;
           Eigen::MatrixXd vertices_out;
           Eigen::MatrixXi faces_out;

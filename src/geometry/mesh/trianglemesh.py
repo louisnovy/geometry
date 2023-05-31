@@ -980,7 +980,42 @@ class TriangleMesh(Geometry):
             out.append(type(self)(cleaned.vertices, faces).remove_unreferenced_vertices())
 
         return [c for c in out if not c.is_empty]
+    
+    def check_intersection(self, other: TriangleMesh, return_index=False) -> bool | tuple[bool, np.ndarray]:
+        """Check if the mesh intersects with another mesh. Self-intersections are ignored.
 
+        Parameters
+        ----------
+        other : `TriangleMesh`
+            Other mesh.
+        return_index : `bool`, optional (default: False)
+            If True, return the indices of the intersecting faces.
+
+        Returns
+        -------
+        `bool`
+            True if the meshes intersect.
+
+        Optionally returns:
+
+        `ndarray (n, 2)`
+            Indices of the intersecting faces.
+        """
+        indices = bindings.intersect_other(
+            self.vertices,
+            self.faces,
+            other.vertices,
+            other.faces,
+            detect_only=True,
+            first_only=False if return_index else True,
+        )[0]
+
+        is_intersecting = len(indices) > 0
+
+        if return_index:
+            return is_intersecting, indices
+
+        return is_intersecting
 
     def outer_hull(self) -> TriangleMesh:
         """Compute the outer hull by resolving self-intersections, removing all internal faces, and
