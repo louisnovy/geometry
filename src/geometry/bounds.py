@@ -15,8 +15,8 @@ class AABB(Geometry):
         except ValueError:
             min, max = args[0]
 
-        self.min = Array(min)
-        self.max = Array(max)
+        self.min = np.asanyarray(min).view(Array)
+        self.max = np.asanyarray(max).view(Array)
 
         if not self.min.shape == self.max.shape:
             raise ValueError("min and max must have the same shape")

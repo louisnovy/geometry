@@ -170,7 +170,7 @@ class TriangleMesh(Geometry):
 
         The centroid is computed from the mean of face centroids weighted by their area.
         """
-        return Array(self.faces.centroids.T @ self.faces.areas / self.area)
+        return (self.faces.centroids.T @ self.faces.areas / self.area).view(Array)
 
     @cached_property
     def aabb(self) -> AABB:
@@ -439,7 +439,7 @@ class TriangleMesh(Geometry):
         else:
             colors = None
         points = Points(samples, attributes=dict(colors=colors))
-        return (points, Array(face_indices)) if return_index else points
+        return (points, face_indices) if return_index else points
     
     # *** Transformations ***
 

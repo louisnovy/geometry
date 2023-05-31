@@ -32,7 +32,7 @@ class Array(np.ndarray):
 
     def __new__(cls, *args, mutable=False, **kwargs):
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
-        self = np.ascontiguousarray(*args, **kwargs).view(cls)
+        self = np.array(*args, **kwargs).view(cls)
         # if not mutable:
         #     self.flags.writeable = False
         return self
