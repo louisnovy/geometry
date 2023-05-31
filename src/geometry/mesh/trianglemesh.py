@@ -981,7 +981,7 @@ class TriangleMesh(Geometry):
 
         return [c for c in out if not c.is_empty]
     
-    def check_intersection(self, other: TriangleMesh, return_index=False) -> bool | tuple[bool, np.ndarray]:
+    def check_intersection(self, other: TriangleMesh, return_index: bool = False) -> tuple[bool, np.ndarray] | bool:
         """Check if the mesh intersects with another mesh. Self-intersections are ignored.
 
         Parameters
@@ -989,7 +989,7 @@ class TriangleMesh(Geometry):
         other : `TriangleMesh`
             Other mesh.
         return_index : `bool`, optional (default: False)
-            If True, return the indices of the intersecting faces.
+            If True, indices of the intersecting face pairs.
 
         Returns
         -------
@@ -999,7 +999,7 @@ class TriangleMesh(Geometry):
         Optionally returns:
 
         `ndarray (n, 2)`
-            Indices of the intersecting faces.
+            Indices of intersecting face pairs.
         """
         # fail fast if aabbs don't intersect
         if not self.aabb.check_intersection(other.aabb):
@@ -1013,8 +1013,8 @@ class TriangleMesh(Geometry):
             other.vertices,
             other.faces,
             detect_only=True,
-            # if we don't need indices, we can stop at the first intersection
-            # indices will just have a single entry if intersections are found
+            # if we don't need indices we can stop when the first intersection is found
+            # indices will have a single entry in this case
             first_only=False if return_index else True,
         )[0]
 
@@ -1054,28 +1054,32 @@ class TriangleMesh(Geometry):
                 # either all or none
                 return mesh.submesh(~np.any(inside, axis=1) if invert else np.all(inside, axis=1))
         else:
-            # TODO: segfaults if degeneracy is present
-            # TODO: instead of just forgetting about degenerates, we should try to also update connectivity
-            a = self.submesh(~self.faces.degenerated)
-            b = other.submesh(~other.faces.degenerated)
-            _, vertices, faces, birth_faces, _ = bindings.intersect_other(
-                a.vertices,
-                a.faces,
-                b.vertices,
-                b.faces,
+            _, intersecting_face_pairs = self.check_intersection(other, return_index=True)
+            
+            a_intersections = np.isin(np.arange(self.n_faces), intersecting_face_pairs[:, 0])
+            b_intersections = np.isin(np.arange(other.n_faces), intersecting_face_pairs[:, 1])
+
+            a = self.submesh(a_intersections)
+            b = other.submesh(b_intersections)
+            both = a.concatenate(b)
+
+            vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(
+                both.vertices,
+                both.faces,
+                stitch_all=True
             )
-            # both = self.concatenate(other)
-            # vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(both.vertices, both.faces, stitch_all=True)
+            
             resolved = type(self)(vertices, faces)
-            a_faces = birth_faces < a.n_faces
-            # a_faces = birth_faces < self.n_faces
-            A = resolved.submesh(a_faces)
-            B = resolved.submesh(~a_faces)
-            def inside(mesh: TriangleMesh, other: TriangleMesh, invert=False):
-                inside = other.contains(mesh.faces.centroids, exact=True)
-                # indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
-                indices = (inside if not invert else ~inside)
-                return mesh.submesh(indices)
+            from_a = birth_faces < a.n_faces
+
+            A = resolved.submesh(from_a).concatenate(self.submesh(~a_intersections))
+            B = resolved.submesh(~from_a).concatenate(other.submesh(~b_intersections))
+
+            def inside(a: TriangleMesh, b: TriangleMesh, invert=False):
+                inside = b.contains(a.faces.centroids, exact=True)
+                indices = (inside if not invert else ~inside) & ~a.faces.degenerated
+                # indices = (inside if not invert else ~inside)
+                return a.submesh(indices)
 
         if operation == "union":
             # only keep faces outside both meshes
@@ -1198,6 +1202,7 @@ class TriangleMesh(Geometry):
 
         edges = ps.register_curve_network("edges", self.vertices, self.edges)
         edges.add_scalar_quantity("vertex_valences", self.vertices.valences)
+        edges.add_scalar_quantity("edge_valences", self.edges.valences, defined_on="edges")
         edges.add_scalar_quantity("edge_lengths", self.edges.lengths, defined_on="edges")
         edges.add_vector_quantity("vertex_normals", self.vertices.normals)
         edges.set_radius(0.001)
@@ -1686,4 +1691,3 @@ def smooth_taubin(
 ) -> TriangleMesh:
     """Smooth a mesh using the Taubin lambda-mu method."""
     raise NotImplementedError
-
