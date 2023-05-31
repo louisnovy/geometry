@@ -8,15 +8,29 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-option(LIBIGL_COPYLEFT_CGAL "Use CGAL" ON)
-include(libigl)
-
 include(pybind11)
+include(libigl)
+include(fcpw)
+
 pybind11_add_module(
     _geometry
+    ./src/bindings/fcpw.cpp
     ./src/bindings/igl.cpp
     ./src/bindings/core.cpp
-)
+    )
+    
+target_link_libraries(
+    _geometry
+    PUBLIC
+    # fcpw
+    igl::core
+    igl_copyleft::cgal
+    )
 
-target_link_libraries(_geometry PUBLIC igl::core igl_copyleft::cgal)
-target_include_directories(_geometry PUBLIC ./src/cpp/)
+target_include_directories(
+    _geometry
+    PUBLIC
+    ./src/cpp/
+    ${FCPW_EIGEN_INCLUDES}
+    ${FCPW_ENOKI_INCLUDES}
+    )

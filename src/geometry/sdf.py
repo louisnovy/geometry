@@ -14,7 +14,7 @@ from . import tensor, bounds as _bounds  # TODO: did not forsee this conflict oo
 # and smooth will not be accurate. for booleans we should probably actually boolean some boxes or something
 
 class SDF:
-    def __init__(self, sdf: Callable, bounds=None):
+    def __init__(self, sdf: Callable, bounds=((-np.inf, -np.inf, -np.inf), (np.inf, np.inf, np.inf))):
         self.func = sdf
         self.aabb = _bounds.AABB(bounds)
 
