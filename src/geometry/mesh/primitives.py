@@ -1,9 +1,9 @@
 import numpy as np
 from numpy.typing import ArrayLike
-from .trimesh import TriMesh
+from .trianglemesh import TriangleMesh
 
 
-def ngon(n=6, radius=1, angle=0) -> TriMesh:
+def ngon(n=6, radius=1, angle=0) -> TriangleMesh:
     """Regular `n`-gon centered at the origin."""
     if not n >= 3:
         raise ValueError("ngons must have at least 3 sides")
@@ -16,7 +16,7 @@ def ngon(n=6, radius=1, angle=0) -> TriMesh:
     faces[:, 0] = np.arange(n)
     faces[:, 1] = np.roll(np.arange(n), -1)
     faces[:, 2] = n
-    return TriMesh(verts, faces)
+    return TriangleMesh(verts, faces)
 
 
 def box(min=(-1, -1, -1), max=(1, 1, 1)):
@@ -48,7 +48,7 @@ def box(min=(-1, -1, -1), max=(1, 1, 1)):
         (4, 0, 3),
         (4, 3, 7),
     ]
-    return TriMesh(vertices, faces)
+    return TriangleMesh(vertices, faces)
 
 
 def tetrahedron():
@@ -56,7 +56,7 @@ def tetrahedron():
     s = 1.0 / np.sqrt(2.0)
     vertices = [(-1.0, 0.0, -s), (1.0, 0.0, -s), (0.0, 1.0, s), (0.0, -1.0, s)]
     faces = [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)]
-    return TriMesh(np.array(vertices) * 0.5, faces)
+    return TriangleMesh(np.array(vertices) * 0.5, faces)
 
 
 def hexahedron():
@@ -113,7 +113,7 @@ def icosahedron():
         (9, 8, 1),
     ]
 
-    return TriMesh(vertices, faces)
+    return TriangleMesh(vertices, faces)
 
 
 # TODO: api should be cone(p0, p1, radius, n, cap=True)
@@ -136,7 +136,7 @@ def cone(n: int, cap=True):
         faces[n:, 1] = n + 1
         faces[n:, 2] = np.roll(faces[n:, 0], -1)
 
-    return TriMesh(verts, faces)
+    return TriangleMesh(verts, faces)
 
 
 # TODO: api should be cylinder(p0, p1, r0, r1, n, cap=True)
@@ -180,7 +180,7 @@ def cylinder(n: int, cap=True):
 
         faces = np.concatenate([faces, cap1, cap2], axis=0)
 
-    return TriMesh(verts, faces)
+    return TriangleMesh(verts, faces)
 
 
 def uv_sphere(u=32, v=16):
@@ -244,7 +244,7 @@ def uv_sphere(u=32, v=16):
     faces[idx, 1] = d
     faces[idx, 2] = b
 
-    return TriMesh(verts, faces)
+    return TriangleMesh(verts, faces)
 
 
 def torus(
@@ -296,4 +296,4 @@ def torus(
     faces[idx, 1] = c
     faces[idx, 2] = d
 
-    return TriMesh(verts, faces)
+    return TriangleMesh(verts, faces)

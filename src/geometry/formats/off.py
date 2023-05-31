@@ -24,4 +24,4 @@ def load(path: str):
         num_vertices, num_faces, _ = [int(x) for x in f.readline().split()]
         vertices = np.loadtxt(f, max_rows=num_vertices, dtype=np.float32)
         faces = np.loadtxt(f, max_rows=num_faces, dtype=np.uint32)[:, 1:]
-    return mesh.TriMesh(vertices, faces)
+    return mesh.TriangleMesh(vertices, faces)

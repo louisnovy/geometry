@@ -20,7 +20,7 @@ from ..cache import AttributeCache, cached_attribute
 from .. import sdf
 
 
-class TriMesh(Geometry):
+class TriangleMesh(Geometry):
     __slots__ = ("_vertices", "_faces")
 
     def __init__(
@@ -443,7 +443,7 @@ class TriMesh(Geometry):
     
     # *** Transformations ***
 
-    def transform(self, matrix: ArrayLike) -> TriMesh:
+    def transform(self, matrix: ArrayLike) -> TriangleMesh:
         """Transform the mesh by applying the given transformation matrix to its vertices.
 
         Parameters
@@ -462,7 +462,7 @@ class TriMesh(Geometry):
         new_vertices = self.vertices @ matrix[:self.dim, :self.dim].T + matrix[:self.dim, self.dim]
         return type(self)(new_vertices, self.faces)
     
-    def translate(self, vector: ArrayLike) -> TriMesh:
+    def translate(self, vector: ArrayLike) -> TriangleMesh:
         """Translate by the given vector.
 
         Parameters
@@ -480,7 +480,7 @@ class TriMesh(Geometry):
             raise ValueError(f"Vector must have shape {(self.dim,)}")
         return type(self)(self.vertices + vector, self.faces)
     
-    def scale(self, factor: float | ArrayLike, center: ArrayLike | None = None) -> TriMesh:
+    def scale(self, factor: float | ArrayLike, center: ArrayLike | None = None) -> TriangleMesh:
         """Scale by the given factor.
 
         Parameters
@@ -513,7 +513,7 @@ class TriMesh(Geometry):
 
     # TODO: we shouldn't be building the matrix here
     # TODO: support 2d
-    def rotate(self, axis: ArrayLike, angle: float, center: ArrayLike | None = None) -> TriMesh:
+    def rotate(self, axis: ArrayLike, angle: float, center: ArrayLike | None = None) -> TriangleMesh:
         """Rotate by the given angle about the given axis.
 
         Parameters
@@ -551,7 +551,7 @@ class TriMesh(Geometry):
         return self.transform(mat)
 
     # TODO: maybe name offset?
-    def dilate(self, offset: float = 0) -> TriMesh:
+    def dilate(self, offset: float = 0) -> TriangleMesh:
         """Dilate the mesh by moving each vertex along its normal by the given offset.
 
         Parameters
@@ -570,7 +570,7 @@ class TriMesh(Geometry):
         """
         return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
     
-    def invert(self) -> TriMesh:
+    def invert(self) -> TriangleMesh:
         """Invert the mesh by reversing the order of the vertices in each face causing
         the normals to point in the opposite direction.
 
@@ -581,7 +581,7 @@ class TriMesh(Geometry):
         """
         return type(self)(self.vertices, self.faces[:, ::-1])
 
-    def concatenate(self, other: TriMesh | list[TriMesh]) -> TriMesh:
+    def concatenate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
         """Concatenate this mesh with another mesh or list of meshes.
 
         Parameters
@@ -617,7 +617,7 @@ class TriMesh(Geometry):
         face_indices: ArrayLike,
         rings: int = 0,
         invert: bool = False,
-    ) -> TriMesh:
+    ) -> TriangleMesh:
         """Create a subset of the mesh from a selection of faces.
         Optionally add to the selection with neighboring rings of faces.
         
@@ -661,7 +661,7 @@ class TriMesh(Geometry):
 
         return type(self)(self.vertices, self.faces[face_indices]).remove_unreferenced_vertices()
     
-    def remove_unreferenced_vertices(self) -> TriMesh:
+    def remove_unreferenced_vertices(self) -> TriangleMesh:
         """Remove vertices that are not referenced by any face. Faces are renumbered accordingly.
 
         Returns
@@ -692,7 +692,7 @@ class TriMesh(Geometry):
         
     
     # TODO: should be called merge_close_vertices?
-    def remove_duplicated_vertices(self, epsilon: float = 0) -> TriMesh:
+    def remove_duplicated_vertices(self, epsilon: float = 0) -> TriangleMesh:
         """Remove duplicate vertices closer than rounding error 'epsilon'.
         
         Parameters
@@ -720,7 +720,7 @@ class TriMesh(Geometry):
         unique, inverse = unique_rows(vertices, return_inverse=True)
         return type(self)(unique, inverse[faces])
     
-    def remove_small_faces(self, epsilon: float = 1e-12) -> TriMesh:
+    def remove_small_faces(self, epsilon: float = 1e-12) -> TriangleMesh:
         """Remove faces with area smaller than 'epsilon'.
 
         Parameters
@@ -737,7 +737,7 @@ class TriMesh(Geometry):
         # faces = bindings.collapse_small_triangles(self.vertices, self.faces, epsilon)
         # return type(self)(self.vertices, faces)
     
-    def remove_duplicated_faces(self) -> TriMesh:
+    def remove_duplicated_faces(self) -> TriangleMesh:
         """Remove duplicate faces.
 
         Returns
@@ -748,7 +748,7 @@ class TriMesh(Geometry):
         faces, indices = bindings.resolve_duplicated_faces(self.faces)
         return type(self)(self.vertices, self.faces[indices])
 
-    def remove_obtuse_triangles(self, max_angle: float = 90) -> TriMesh:
+    def remove_obtuse_triangles(self, max_angle: float = 90) -> TriangleMesh:
         """Remove triangles with any internal angle greater than 'max_angle'.
 
         Parameters
@@ -765,7 +765,7 @@ class TriMesh(Geometry):
     
     # *** Remeshing ***
 
-    def resolve_self_intersections(self, remove_duplicated_vertices=True, remove_degenerated_faces=True) -> TriMesh:
+    def resolve_self_intersections(self, remove_duplicated_vertices=True, remove_degenerated_faces=True) -> TriangleMesh:
         """Resolve self-intersections by creating new edges where faces intersect.
 
         Returns
@@ -783,7 +783,7 @@ class TriMesh(Geometry):
         return out
 
     
-    def collapse_short_edges(self, length: float | None = None) -> TriMesh:
+    def collapse_short_edges(self, length: float | None = None) -> TriangleMesh:
         """Collapse edges shorter than 'length'.
 
         Parameters
@@ -798,7 +798,7 @@ class TriMesh(Geometry):
         """
         raise NotImplementedError
     
-    def split_long_edges(self, length: float | None = None) -> TriMesh:
+    def split_long_edges(self, length: float | None = None) -> TriangleMesh:
         """Split edges longer than 'length'.
 
         Parameters
@@ -813,7 +813,7 @@ class TriMesh(Geometry):
         """
         raise NotImplementedError
     
-    def subdivide(self, method: Literal["midpoint", "loop"] = "midpoint") -> TriMesh:
+    def subdivide(self, method: Literal["midpoint", "loop"] = "midpoint") -> TriangleMesh:
         """Subdivide the mesh.
 
         Parameters
@@ -828,7 +828,7 @@ class TriMesh(Geometry):
         """
         raise NotImplementedError
     
-    def decimate(self, n_faces: int | None = None, method: Literal["quadric", "edge_collapse"] = "quadric") -> TriMesh:
+    def decimate(self, n_faces: int | None = None, method: Literal["quadric", "edge_collapse"] = "quadric") -> TriangleMesh:
         """Decimate the mesh.
 
         Parameters
@@ -845,7 +845,7 @@ class TriMesh(Geometry):
         """
         raise NotImplementedError
 
-    def convex_hull(self, joggle_on_failure: bool = True) -> TriMesh:
+    def convex_hull(self, joggle_on_failure: bool = True) -> TriangleMesh:
         """Compute the convex hull.
 
         Parameters
@@ -860,7 +860,7 @@ class TriMesh(Geometry):
         """
         return convex_hull(self, joggle_on_failure=joggle_on_failure)
 
-    def separate(self, connectivity: Literal["face", "vertex"] = "face") -> list[TriMesh]:
+    def separate(self, connectivity: Literal["face", "vertex"] = "face") -> list[TriangleMesh]:
         """Return a list of meshes, each representing a connected component of the mesh.
         
         Parameters
@@ -924,7 +924,7 @@ class TriMesh(Geometry):
 
     #     return [c for c in out if not c.is_empty]
 
-    def extract_cells(self, outer_only=False) -> list[TriMesh]:
+    def extract_cells(self, outer_only=False) -> list[TriangleMesh]:
         """Cells are subsets of the mesh where any pair of points belonging to the cell can be 
         connected by a curve without going through any faces.
 
@@ -982,7 +982,7 @@ class TriMesh(Geometry):
         return [c for c in out if not c.is_empty]
 
 
-    def outer_hull(self) -> TriMesh:
+    def outer_hull(self) -> TriangleMesh:
         """Compute the outer hull by resolving self-intersections, removing all internal faces, and
         correcting the winding order.
 
@@ -997,7 +997,7 @@ class TriMesh(Geometry):
     
     def boolean(
         self,
-        other: TriMesh,
+        other: TriangleMesh,
         operation: Literal["union", "intersection", "difference"],
         clip: bool = False,
         cull: bool = False,
@@ -1005,7 +1005,7 @@ class TriMesh(Geometry):
         if cull:
             A = self
             B = other
-            def inside(mesh: TriMesh, other: TriMesh, invert=False):
+            def inside(mesh: TriangleMesh, other: TriangleMesh, invert=False):
                 # check all corners
                 inside = other.contains(mesh.faces.corners.reshape(-1, 3)).reshape(-1, 3)
                 # either all or none
@@ -1028,7 +1028,7 @@ class TriMesh(Geometry):
             # a_faces = birth_faces < self.n_faces
             A = resolved.submesh(a_faces)
             B = resolved.submesh(~a_faces)
-            def inside(mesh: TriMesh, other: TriMesh, invert=False):
+            def inside(mesh: TriangleMesh, other: TriangleMesh, invert=False):
                 inside = other.contains(mesh.faces.centroids, exact=True)
                 # indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
                 indices = (inside if not invert else ~inside)
@@ -1058,7 +1058,7 @@ class TriMesh(Geometry):
         
         return type(self)().concatenate([a, b]).remove_duplicated_vertices()
     
-    def union(self, other: TriMesh, clip=False, cull=False) -> TriMesh:
+    def union(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
         """Compute the union of two meshes.
 
         Parameters
@@ -1073,7 +1073,7 @@ class TriMesh(Geometry):
         """
         return self.boolean(other, "union", clip=clip, cull=cull)
     
-    def intersection(self, other: TriMesh, clip=False, cull=False) -> TriMesh:
+    def intersection(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
         """Compute the intersection of two meshes.
 
         Parameters
@@ -1088,7 +1088,7 @@ class TriMesh(Geometry):
         """
         return self.boolean(other, "intersection", clip=clip, cull=cull)
     
-    def difference(self, other: TriMesh, clip=False, cull=False) -> TriMesh:
+    def difference(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
         """Compute the difference of two meshes.
 
         Parameters
@@ -1103,7 +1103,7 @@ class TriMesh(Geometry):
         """
         return self.boolean(other, "difference", clip=clip, cull=cull)
     
-    def crop(self, other: TriMesh, cull: bool = False, invert: bool = False) -> TriMesh:
+    def crop(self, other: TriangleMesh, cull: bool = False, invert: bool = False) -> TriangleMesh:
         """Crop by removing the part of self that is outside the other mesh. 
         This is equivalent to computing boolean intersection (invert=False) or difference (invert=True)
         with clip=True.
@@ -1167,7 +1167,7 @@ class Vertices(Points):
     def __new__(
         cls,
         vertices: ArrayLike,
-        mesh: TriMesh,
+        mesh: TriangleMesh,
         attributes: dict | None = None,
     ):
         if vertices is None:
@@ -1317,7 +1317,7 @@ class Faces(Array):
     def __new__(
         cls,
         faces: ArrayLike | None = None,
-        mesh: TriMesh | None = None,
+        mesh: TriangleMesh | None = None,
         attributes: dict | None = None,
     ):
         if faces is None:
@@ -1528,7 +1528,7 @@ class Edges(Array):
     def __new__(
         cls: Type[Edges],
         edges: ArrayLike | None = None,
-        mesh: TriMesh | None = None,
+        mesh: TriangleMesh | None = None,
     ):
         if edges is None:
             edges = np.empty((0, 2), dtype=np.int32)
@@ -1542,7 +1542,7 @@ class Edges(Array):
 
     @classmethod
     def from_halfedges(
-        cls: Type[Edges], halfedges: np.ndarray, mesh: TriMesh
+        cls: Type[Edges], halfedges: np.ndarray, mesh: TriangleMesh
     ) -> Edges:
         """Create an `Edges` object from an array of halfedges."""
         sorted_edges = np.sort(halfedges.reshape(-1, 2), axis=1)
@@ -1578,13 +1578,13 @@ class Edges(Array):
 
 
 def convex_hull(
-    obj: TriMesh | Points,
+    obj: TriangleMesh | Points,
     qhull_options: str | None = None,
     joggle_on_failure: bool = True,
 ):
     """Compute the convex hull of a set of points or mesh."""
-    mesh_type = TriMesh
-    if isinstance(obj, TriMesh):
+    mesh_type = TriangleMesh
+    if isinstance(obj, TriangleMesh):
         points = obj.vertices
         mesh_type = type(obj)  # if mesh is a subclass, return that type
     else:
@@ -1622,9 +1622,9 @@ def convex_hull(
 
 
 def smooth_laplacian(
-    mesh: TriMesh, 
+    mesh: TriangleMesh, 
     iterations: int = 1,
-) -> TriMesh:
+) -> TriangleMesh:
     adjacency = mesh.vertices.adjacency_matrix
     vertices = mesh.vertices.copy()
     valences = vertices.valences.reshape(-1, 1)
@@ -1636,20 +1636,11 @@ def smooth_laplacian(
 
 
 def smooth_taubin(
-    mesh: TriMesh,
+    mesh: TriangleMesh,
     iterations: int = 1,
     lamb: float = 0.5,
     mu: float = -0.53,
-) -> TriMesh:
+) -> TriangleMesh:
     """Smooth a mesh using the Taubin lambda-mu method."""
     raise NotImplementedError
-
-
-from .boolean import boolean, check_intersection as _check_intersection
-
-def check_intersection(
-    a: TriMesh,
-    b: TriMesh,
-) -> bool:
-    return _check_intersection(a, b)
 

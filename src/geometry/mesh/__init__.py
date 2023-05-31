@@ -1,4 +1,4 @@
-from .trimesh import *
+from .trianglemesh import *
 
 from .primitives import (
     ngon,
