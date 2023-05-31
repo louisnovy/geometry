@@ -4,3 +4,6 @@
 [submodule "ext/libigl"]
 	path = ext/libigl
 	url = https://github.com/libigl/libigl.git
+[submodule "ext/fcpw"]
+	path = ext/fcpw
+	url = https://github.com/rohan-sawhney/fcpw

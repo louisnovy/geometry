@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Iterable, Literal, Type
 from numpy.typing import ArrayLike
-from functools import cached_property, partial
+from functools import cached_property, partial, partialmethod
 
 import numpy as np
 from numpy import isclose
@@ -264,7 +264,7 @@ class TriMesh(Geometry):
 
         return bindings.AABBTree(self.vertices, self.faces)
 
-    def winding_number(self, queries: ArrayLike) -> np.ndarray:
+    def winding_number(self, queries: ArrayLike, exact=False) -> np.ndarray:
         """Compute the winding number at each query point with respect to the mesh.
 
         Parameters
@@ -281,8 +281,8 @@ class TriMesh(Geometry):
         if not queries.ndim == 2:
             raise ValueError("`queries` must be a 2D array.")
         
-        # if exact:
-        #     return bindings.generalized_winding_number(self.vertices, self.faces, queries)
+        if exact:
+            return bindings.generalized_winding_number(self.vertices, self.faces, queries)
         
         return self._winding_number_bvh.query(queries, 2.3)
 
@@ -299,7 +299,7 @@ class TriMesh(Geometry):
         `ndarray (n_queries,)`
             True if the query point is inside the mesh.
         """
-        return self.winding_number(queries) > 0.5
+        return self.winding_number(queries, exact=exact) > 0.5
 
     def _distance(
         self,
@@ -570,13 +570,14 @@ class TriMesh(Geometry):
         """
         return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
     
-    def flip_normals(self) -> TriMesh:
-        """Flip the normals of the mesh by reversing the order of the vertices in each face.
+    def invert(self) -> TriMesh:
+        """Invert the mesh by reversing the order of the vertices in each face causing
+        the normals to point in the opposite direction.
 
         Returns
         -------
         `TriangleMesh`
-            Mesh with flipped normals.
+            Inverted mesh.
         """
         return type(self)(self.vertices, self.faces[:, ::-1])
 
@@ -937,7 +938,7 @@ class TriMesh(Geometry):
         `list[TriangleMesh]`
             List of cell meshes.
         """
-        raise NotImplementedError
+        # raise NotImplementedError
 
         # vertices, faces, intersecting_faces, birth_faces, unique_vertices = bindings.remesh_self_intersections(self.vertices, self.faces)
         # vertices = vertices[unique_vertices]
@@ -948,22 +949,38 @@ class TriMesh(Geometry):
         # cleaned = type(self)().concatenate(components)
         # cleaned = resolved.remove_unreferenced_vertices()
 
+        # cleaned = self.resolve_self_intersections()
+        # # cleaned = self.submesh(~self.faces.degenerated)
+        # labels = bindings.extract_cells(cleaned.vertices, cleaned.faces)
+        # n_components = labels.max() + 1
+
+        # out = []
+        # for i in range(1, n_components):
+        #     faces = cleaned.faces.copy()
+        #     faces[labels[:, 0] == i] = np.fliplr(faces[labels[:, 0] == i])
+        #     # only keep faces that are part of this cell
+        #     faces = faces[np.any(labels == i, axis=1)]
+        #     out.append(type(self)(cleaned.vertices, faces).remove_unreferenced_vertices())
+
+        # return [c for c in out if not c.is_empty]
+
         cleaned = self.resolve_self_intersections()
         # cleaned = self.submesh(~self.faces.degenerated)
+        # cleaned = self
         labels = bindings.extract_cells(cleaned.vertices, cleaned.faces)
-        n_components = labels.max() + 1
-
+        n_cells = labels.max() + 1
+        
+        from tqdm import trange
         out = []
-        for i in range(1, n_components):
-            if outer_only and len(out) > 0:
-                break
-            faces = cleaned.faces.copy()
-            faces[labels[:, 0] == i] = np.fliplr(faces[labels[:, 0] == i])
+        for i in trange(0, n_cells):
             # only keep faces that are part of this cell
-            faces = faces[np.any(labels == i, axis=1)]
+            this_cell = np.any(labels == i, axis=1)
+            faces = cleaned.faces[this_cell]
+            faces[labels[this_cell, 1] == i] = np.fliplr(faces[labels[this_cell, 1] == i])
             out.append(type(self)(cleaned.vertices, faces).remove_unreferenced_vertices())
 
         return [c for c in out if not c.is_empty]
+
 
     def outer_hull(self) -> TriMesh:
         """Compute the outer hull by resolving self-intersections, removing all internal faces, and
@@ -994,15 +1011,27 @@ class TriMesh(Geometry):
                 # either all or none
                 return mesh.submesh(~np.any(inside, axis=1) if invert else np.all(inside, axis=1))
         else:
-            both = self.concatenate(other)
-            vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(both.vertices, both.faces, stitch_all=True)
+            # TODO: segfaults if degeneracy is present
+            # TODO: instead of just forgetting about degenerates, we should try to also update connectivity
+            a = self.submesh(~self.faces.degenerated)
+            b = other.submesh(~other.faces.degenerated)
+            _, vertices, faces, birth_faces, _ = bindings.intersect_other(
+                a.vertices,
+                a.faces,
+                b.vertices,
+                b.faces,
+            )
+            # both = self.concatenate(other)
+            # vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(both.vertices, both.faces, stitch_all=True)
             resolved = type(self)(vertices, faces)
-            a_faces = birth_faces < self.n_faces
+            a_faces = birth_faces < a.n_faces
+            # a_faces = birth_faces < self.n_faces
             A = resolved.submesh(a_faces)
             B = resolved.submesh(~a_faces)
             def inside(mesh: TriMesh, other: TriMesh, invert=False):
-                inside = other.contains(mesh.faces.centroids)
-                indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
+                inside = other.contains(mesh.faces.centroids, exact=True)
+                # indices = (inside if not invert else ~inside) & ~mesh.faces.degenerated
+                indices = (inside if not invert else ~inside)
                 return mesh.submesh(indices)
 
         if operation == "union":
@@ -1023,7 +1052,7 @@ class TriMesh(Geometry):
             if clip:
                 return a
             # invert because B surface is now part of A
-            b = inside(B, A).flip_normals()
+            b = inside(B, A).invert()
         else:
             raise ValueError("Invalid boolean operation")
         

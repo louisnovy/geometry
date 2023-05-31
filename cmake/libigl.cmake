@@ -1,3 +1,5 @@
+option(LIBIGL_COPYLEFT_CGAL "Use CGAL" ON)
+
 if(TARGET igl::core)
     return()
 endif()

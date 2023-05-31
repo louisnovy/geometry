@@ -14,6 +14,12 @@ PYBIND11_MODULE(_geometry, m) {
     m.attr("__path__") = "geometry";
     m.attr("__file__") = "geometry/__init__.py";
 
+    py::module igl = m.def_submodule("igl");
+    igl.doc() = "libigl bindings";
+
+    py::module fcpw = m.def_submodule("fcpw");
+    fcpw.doc() = "fcpw bindings";
+
     bindings(m);
 }
 

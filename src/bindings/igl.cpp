@@ -207,17 +207,32 @@ void bindings(py::module &m) {
 
   m.def("intersect_other",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
-           EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in) {
+           EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in,
+           bool detect_only = false, bool first_only = false) {
           Eigen::MatrixXd verticesA(verticesA_in);
           Eigen::MatrixXi facesA(facesA_in);
           Eigen::MatrixXd verticesB(verticesB_in);
           Eigen::MatrixXi facesB(facesB_in);
-          const bool first_only = true;
+          igl::copyleft::cgal::RemeshSelfIntersectionsParam params;
           Eigen::MatrixXi intersecting_face_pairs;
-          return igl::copyleft::cgal::intersect_other(
-              verticesA, facesA, verticesB, facesB, first_only,
-              intersecting_face_pairs);
-        });
+          Eigen::MatrixXd vertices_out;
+          Eigen::MatrixXi faces_out;
+          Eigen::VectorXi source_face_indices;
+          Eigen::VectorXi unique_vertex_indices;
+          igl::copyleft::cgal::intersect_other(
+              verticesA, facesA, verticesB, facesB, params,
+              intersecting_face_pairs, vertices_out, faces_out,
+              source_face_indices, unique_vertex_indices);
+          return std::make_tuple(intersecting_face_pairs, vertices_out,
+                                 faces_out, source_face_indices,
+                                 unique_vertex_indices);
+        },
+  py::arg("verticesA"),
+  py::arg("facesA"),
+  py::arg("verticesB"),
+  py::arg("facesB"),
+  py::arg("detect_only") = false,
+  py::arg("first_only") = false);
 
   m.def("remesh_self_intersections", [](EigenDRef<MatrixXd> vertices_in,
                                         EigenDRef<MatrixXi> faces_in,
