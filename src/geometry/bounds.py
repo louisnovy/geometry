@@ -62,6 +62,10 @@ class AABB(Geometry):
         queries = np.asanyarray(queries)
         return np.all((queries >= self.min) & (queries <= self.max), axis=1)
     
+    def check_intersection(self, other: AABB) -> bool:
+        """Check whether the AABB intersects another AABB."""
+        return np.all(self.min <= other.max) and np.all(self.max >= other.min)
+    
     def offset(self, offset) -> AABB:
         return type(self)(self.min - offset, self.max + offset)
     

@@ -1001,12 +1001,20 @@ class TriangleMesh(Geometry):
         `ndarray (n, 2)`
             Indices of the intersecting faces.
         """
+        # fail fast if aabbs don't intersect
+        if not self.aabb.check_intersection(other.aabb):
+            if return_index:
+                return False, np.empty((0, 2), dtype=np.int32)
+            return False
+
         indices = bindings.intersect_other(
             self.vertices,
             self.faces,
             other.vertices,
             other.faces,
             detect_only=True,
+            # if we don't need indices, we can stop at the first intersection
+            # indices will just have a single entry if intersections are found
             first_only=False if return_index else True,
         )[0]
 
