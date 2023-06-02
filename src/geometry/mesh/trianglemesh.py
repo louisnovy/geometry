@@ -422,7 +422,7 @@ class TriangleMesh(Geometry):
             colors = np.einsum("ij,ijk->ik", barycentric, self.vertices.colors[self.faces[face_indices]])
         else:
             colors = None
-        points = Points(samples, attributes=dict(colors=colors))
+        points = samples.view(Points)
         return (points, face_indices) if return_index else points
     
     # *** Transformations ***
@@ -1671,9 +1671,6 @@ def convex_hull(
     flipped = np.einsum("ij,ij->i", m.faces.centroids - m.centroid, m.faces.normals) < 0
     fixed = np.where(flipped[:, None], m.faces[:, ::-1], m.faces)
 
-    # TODO: propagate vertex attributes
-    # TODO: face attributes?
-
     return mesh_type(m.vertices, fixed)
 
 
@@ -1683,8 +1680,8 @@ def smooth_laplacian(
     iterations: int = 1,
 ) -> TriangleMesh:
     adjacency = mesh.vertices.adjacency_matrix
+    valences = mesh.vertices.valences.reshape(-1, 1)
     vertices = mesh.vertices.copy()
-    valences = vertices.valences.reshape(-1, 1)
 
     for _ in range(iterations):
         vertices = (adjacency @ vertices) / valences
@@ -1698,5 +1695,16 @@ def smooth_taubin(
     lamb: float = 0.5,
     mu: float = -0.53,
 ) -> TriangleMesh:
-    """Smooth a mesh using the Taubin lambda-mu method."""
-    raise NotImplementedError
+    adjacency = mesh.vertices.adjacency_matrix
+    valences = mesh.vertices.valences.reshape(-1, 1)
+    vertices = mesh.vertices.copy()
+
+    for i in range(iterations):
+        delta = (adjacency @ vertices) / valences - vertices
+
+        if i % 2 == 0:
+            vertices += lamb * delta
+        else:
+            vertices -= mu * delta
+
+    return type(mesh)(vertices, mesh.faces)
