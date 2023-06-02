@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Literal
 from numpy.typing import ArrayLike
+from functools import cached_property
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -9,28 +10,19 @@ from .array import Array
 from .base import Geometry
 from .bounds import AABB
 from .utils import unique_rows
-from .cache import AttributeCache, cached_attribute
 
 class Points(Array, Geometry):
     """A collection of points in n-dimensional space."""
     def __new__(
         cls,
         points: ArrayLike,
-        attributes: dict | None = None,
         **kwargs,
     ) -> Points:
         self = super().__new__(cls, points, **kwargs)
         if self.ndim != 2:
             raise ValueError(f"Points array must be 2D, got {self.ndim}D")
-        self._attributes = AttributeCache(attributes)
         return self
     
-    def __getitem__(self, key):
-        result = super().__getitem__(key)
-        if isinstance(result, type(self)):
-            result._attributes = self._attributes.slice(key)
-        return result
-
     @classmethod
     def empty(cls, dim: int, dtype=None):
         return cls(np.empty((0, dim), dtype=dtype))
@@ -42,7 +34,7 @@ class Points(Array, Geometry):
     def save(self, path: str):
         raise NotImplementedError
     
-    @cached_attribute
+    @cached_property
     def colors(self):
         """`Colors` associated with each point.
         Defaults to `None` if colors were not provided.
@@ -72,7 +64,7 @@ class Points(Array, Geometry):
         singular_values = np.linalg.svd(self - self.mean(axis=0), compute_uv=False, full_matrices=False)
         return np.allclose(singular_values[2], 0, atol=1e-6) # TODO: tolerance should be configurable
 
-    @cached_attribute
+    @cached_property
     def kdtree(self) -> cKDTree:
         return cKDTree(self)
     
@@ -97,7 +89,6 @@ def downsample_poisson(points: Points, radius: float) -> Points:
     # mask of points to keep
     mask = np.ones(len(points), dtype=bool)
     # doing this in a loop to avoid memory issues
-    # TODO: do a memory check with psutil or something and do in one go if possible
     for i in range(len(points)):
         if not mask[i]: # already ruled out
             continue

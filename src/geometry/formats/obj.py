@@ -42,8 +42,9 @@ def load(path: str):
     vertices = np.array(vertices, dtype=float)
     faces = np.array(faces, dtype=int) - 1
 
-    vertex_attributes = dict(colors=np.array(colors, dtype=float)) if colors else None
+    # vertex_attributes = dict(colors=np.array(colors, dtype=float)) if colors else None
 
-    return mesh.TriangleMesh(vertices, faces, vertex_attributes=vertex_attributes)
+    # return mesh.TriangleMesh(vertices, faces, vertex_attributes=vertex_attributes)
+    return mesh.TriangleMesh(vertices, faces)
 
 

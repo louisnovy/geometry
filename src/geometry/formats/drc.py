@@ -17,10 +17,15 @@ def load(path: str | Path) -> mesh.TriangleMesh | points.Points:
         colors = obj.colors / 255 if obj.colors is not None else None
         attributes = dict(colors=colors) if colors is not None else None
         
-        if hasattr(obj, "faces"):
-            return mesh.TriangleMesh(obj.points, obj.faces, vertex_attributes=attributes)
+        # if hasattr(obj, "faces"):
+        #     return mesh.TriangleMesh(obj.points, obj.faces, vertex_attributes=attributes)
 
-        return points.Points(obj.points, attributes=attributes)
+        # return points.Points(obj.points, attributes=attributes)
+
+        if hasattr(obj, "faces"):
+            return mesh.TriangleMesh(obj.points, obj.faces)
+
+        return points.Points(obj.points)
     
 def save(obj: mesh.TriangleMesh | points.Points, path: str | Path, **kwargs) -> None:
     with open(path, "wb") as f:
