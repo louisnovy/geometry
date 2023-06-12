@@ -30,7 +30,7 @@ class Array(np.ndarray):
     Array([1, 2, 3])
     """
 
-    def __new__(cls, *args, mutable=False, **kwargs):
+    def __new__(cls, *args, **kwargs):
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
         self = np.array(*args, **kwargs).view(cls)
         # if not mutable:

@@ -5,6 +5,7 @@ from functools import cached_property, partial, partialmethod
 
 import numpy as np
 import pickle
+from pathlib import Path
 from numpy import isclose
 from numpy.linalg import norm
 from scipy.sparse import csr_array, csgraph
@@ -53,7 +54,7 @@ class TriangleMesh(Geometry):
         """
         return load(path, format=format, **kwargs)
     
-    def save(self, path: str, format: str | None = None, **kwargs):
+    def save(self, path: str | Path, format: str | None = None, **kwargs):
         """Save a TriangleMesh to a file.
 
         Parameters
@@ -137,7 +138,7 @@ class TriangleMesh(Geometry):
     @property
     def area(self) -> float:
         """`float` : Total surface area of the mesh."""
-        return self.faces.areas.sum()
+        return self.faces.double_areas.sum() * 0.5
 
     @cached_property
     def volume(self) -> float:
@@ -194,7 +195,7 @@ class TriangleMesh(Geometry):
     
     @cached_property
     def is_vertex_manifold(self) -> bool:
-        """`bool` : True if all vertices are shared by exactly one or two faces."""
+        """`bool` : True if incident faces of each vertex form a locally planar disk."""
         if self.n_faces == 0: return False
         return bool(np.all(bindings.is_vertex_manifold(self.faces)) and np.all(self.vertices.referenced))
     
@@ -622,6 +623,10 @@ class TriangleMesh(Geometry):
         """
         face_indices = np.asanyarray(face_indices)
 
+        # if no selection, return empty mesh
+        if not np.any(face_indices):
+            return type(self)(np.empty((0, self.dim)), np.empty((0, self.dim), dtype=int))
+
         if rings > 0:
             # TODO: do this with sparse matrix ops instead?
             incidence_list = self.vertices.incidence_list # (n_vertices, n_face_neighbors)
@@ -674,7 +679,6 @@ class TriangleMesh(Geometry):
 
         return type(self)(vertices, faces)
         
-    
     # TODO: should be called merge_close_vertices?
     def remove_duplicated_vertices(self, epsilon: float = 0) -> TriangleMesh:
         """Remove duplicate vertices closer than rounding error 'epsilon'.
@@ -763,7 +767,7 @@ class TriangleMesh(Geometry):
         if remove_duplicated_vertices:
             out = out.remove_duplicated_vertices()
         if remove_degenerated_faces:
-            out = out.submesh(np.flatnonzero(out.faces.areas > 0))
+            out = out.submesh(~out.faces.degenerated)
         return out
 
     
@@ -877,106 +881,43 @@ class TriangleMesh(Geometry):
         n_components, labels = csgraph.connected_components(adjacency, directed=False)
         return [self.submesh(np.flatnonzero(get_indices(i))) for i in range(n_components)]
 
-    def extract_cells(self, resolve_intersections=True, outer_only=False) -> list[TriangleMesh]:
+    def extract_cells(self, outer_only=False) -> list[TriangleMesh]:
         """Cells are subsets of the mesh where any pair of points belonging to the cell can be 
         connected by a curve without going through any faces.
 
+        Parameters
+        ----------
+        outer_only : `bool`, optional (default: False)
+            If True, only return cells connected to infinity.
+        
         Returns
         -------
         `list[TriangleMesh]`
             List of cell meshes.
         """
-
-        if resolve_intersections:
-            # cleaned = self.resolve_self_intersections(remove_duplicated_vertices=False)
-            cleaned = self.resolve_self_intersections()
-        else:
-            cleaned = self.submesh(~self.faces.degenerated)
-
-        # out = []
-        # for component in cleaned.separate():
-        #     indices = bindings.extract_cells(component.vertices, component.faces)
-        #     cells = []
-        #     for i in range(1, indices.max() + 1):
-        #         if outer_only and len(cells) > 0:
-        #             break
-        #         faces = component.faces.copy()
-        #         faces[indices[:, 0] == i] = np.fliplr(faces[indices[:, 0] == i])
-        #         # only keep faces that are part of this cell
-        #         faces = faces[np.any(indices == i, axis=1)]
-        #         # out.append(type(self)(component.vertices, faces).remove_unreferenced_vertices())
-        #         cells.append(type(self)(component.vertices, faces).remove_unreferenced_vertices())
-        #     out.extend(cells)
+        labels = bindings.extract_cells(self.vertices, self.faces)
 
         out = []
-        labels = bindings.extract_cells(cleaned.vertices, cleaned.faces)
         n_components = labels.max() + 1
         for i in range(n_components):
             if outer_only and not 0 in labels[labels == i]:
                 continue
-            faces = cleaned.faces.copy()
+            faces = self.faces.copy()
             faces[labels[:, 0] == i] = np.fliplr(faces[labels[:, 0] == i])
             # only keep faces that are part of this cell
             faces = faces[np.any(labels == i, axis=1)]
-            out.append(type(self)(cleaned.vertices, faces).remove_unreferenced_vertices())
+            out.append(type(self)(self.vertices, faces).remove_unreferenced_vertices())
+
+            # if outer_only and not 0 in labels[labels == i]:
+            #     continue
+
+            # # don't make a copy of the faces only to remove most later
+            # to_keep = np.any(labels == i, axis=1)
+            # faces = self.faces[to_keep]
+            # faces[labels[to_keep] == i] = np.fliplr(faces[labels[to_keep] == i])
+            # out.append(type(self)(self.vertices, faces).remove_unreferenced_vertices())
 
         return [c for c in out if not c.is_empty]
-
-    # def extract_cells(self, outer_only=False) -> list[TriangleMesh]:
-    #     """Cells are subsets of the mesh where any pair of points belonging to the cell can be 
-    #     connected by a curve without going through any faces.
-
-    #     Parameters
-    #     ----------
-    #     outer_only : `bool`, optional (default: False)
-    #         If True, only return components where every face can be reached from infinity.
-
-    #     Returns
-    #     -------
-    #     `list[TriangleMesh]`
-    #         List of cell meshes.
-    #     """
-    #     # raise NotImplementedError
-
-    #     # vertices, faces, intersecting_faces, birth_faces, unique_vertices = bindings.remesh_self_intersections(self.vertices, self.faces)
-    #     # vertices = vertices[unique_vertices]
-    #     # resolved = type(self)(vertices, faces)
-        
-    #     # components = [c.remove_duplicated_vertices() for c in resolved.separate("vertex")]
-
-    #     # cleaned = type(self)().concatenate(components)
-    #     # cleaned = resolved.remove_unreferenced_vertices()
-
-    #     # cleaned = self.resolve_self_intersections()
-    #     # # cleaned = self.submesh(~self.faces.degenerated)
-    #     # labels = bindings.extract_cells(cleaned.vertices, cleaned.faces)
-    #     # n_components = labels.max() + 1
-
-    #     # out = []
-    #     # for i in range(1, n_components):
-    #     #     faces = cleaned.faces.copy()
-    #     #     faces[labels[:, 0] == i] = np.fliplr(faces[labels[:, 0] == i])
-    #     #     # only keep faces that are part of this cell
-    #     #     faces = faces[np.any(labels == i, axis=1)]
-    #     #     out.append(type(self)(cleaned.vertices, faces).remove_unreferenced_vertices())
-
-    #     # return [c for c in out if not c.is_empty]
-
-    #     cleaned = self.resolve_self_intersections()
-    #     # cleaned = self.submesh(~self.faces.degenerated)
-    #     # cleaned = self
-    #     labels = bindings.extract_cells(cleaned.vertices, cleaned.faces)
-    #     n_cells = labels.max() + 1
-        
-    #     from tqdm import trange
-    #     out = []
-    #     for i in trange(0, n_cells):
-    #         # only keep faces that are part of this cell
-    #         this_cell = np.any(labels == i, axis=1)
-    #         faces = cleaned.faces[this_cell]
-    #         faces[labels[this_cell, 1] == i] = np.fliplr(faces[labels[this_cell, 1] == i])
-            
-    #     return [c for c in out if not c.is_empty]
 
     def outer_hull(self) -> TriangleMesh:
         """Compute the outer hull by resolving self-intersections, removing all internal faces, and
@@ -987,7 +928,7 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Outer hull of the mesh.
         """
-        return type(self)().concatenate(self.extract_cells(outer_only=True))
+        return type(self)().concatenate(self.extract_cells(outer_only=True)).invert()
     
     def check_intersection(self, other: TriangleMesh, return_index: bool = False) -> tuple[bool, np.ndarray] | bool:
         """Detect if the mesh intersects with another mesh. Self-intersections are ignored.
@@ -1040,6 +981,7 @@ class TriangleMesh(Geometry):
         clip: bool = False,
         cull: bool = False,
     ):
+
         if cull:
             A = self
             B = other
@@ -1051,29 +993,30 @@ class TriangleMesh(Geometry):
         else:
             _, intersecting_face_pairs = self.check_intersection(other, return_index=True)
             
-            a_intersections = np.isin(np.arange(self.n_faces), intersecting_face_pairs[:, 0])
-            b_intersections = np.isin(np.arange(other.n_faces), intersecting_face_pairs[:, 1])
+            a_intersections = np.in1d(np.arange(self.n_faces), intersecting_face_pairs[:, 0])
+            b_intersections = np.in1d(np.arange(other.n_faces), intersecting_face_pairs[:, 1])
 
             a = self.submesh(a_intersections)
             b = other.submesh(b_intersections)
-            both = a.concatenate(b)
+            intersecting = a + b
 
             vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(
-                both.vertices,
-                both.faces,
+                intersecting.vertices,
+                intersecting.faces,
                 stitch_all=True
             )
             
             resolved = type(self)(vertices, faces)
             from_a = birth_faces < a.n_faces
 
-            A = resolved.submesh(from_a).concatenate(self.submesh(~a_intersections))
-            B = resolved.submesh(~from_a).concatenate(other.submesh(~b_intersections))
+            A = resolved.submesh(from_a) + self.submesh(~a_intersections)
+            B = resolved.submesh(~from_a) + other.submesh(~b_intersections)
 
             def inside(a: TriangleMesh, b: TriangleMesh, invert=False):
+                # inside = b.contains(a.faces.centroids, exact=True)
                 inside = b.contains(a.faces.centroids)
-                indices = (inside if not invert else ~inside) & ~a.faces.degenerated
-                # indices = (inside if not invert else ~inside)
+                # indices = (inside if not invert else ~inside) & ~a.faces.degenerated
+                indices = (inside if not invert else ~inside)
                 return a.submesh(indices)
 
         if operation == "union":
@@ -1098,7 +1041,7 @@ class TriangleMesh(Geometry):
         else:
             raise ValueError("Invalid boolean operation")
         
-        return type(self)().concatenate([a, b]).remove_duplicated_vertices()
+        return (a + b).remove_duplicated_vertices()
     
     def union(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
         """Compute the union of two meshes.
@@ -1181,6 +1124,44 @@ class TriangleMesh(Geometry):
         # TODO: gross
         self.vertices._mesh = self
         self.faces._mesh = self
+
+    def __mul__(self, other: float) -> TriangleMesh:
+        return self.scale(other)
+    
+    def __truediv__(self, other: float) -> TriangleMesh:
+        return self.scale(1 / other)
+
+    def __add__(self, other: ArrayLike | TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
+        try:
+            return self.translate(other) # type: ignore
+        except TypeError:
+            return self.concatenate(other) # type: ignore
+
+    def __radd__(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
+        if other == 0:
+            return self
+        return self + other
+    
+    def __sub__(self, other: ArrayLike | TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
+        return self.__add__(-other) # type: ignore
+    
+    def __and__(self, other: TriangleMesh) -> TriangleMesh:
+        return self.intersection(other)
+    
+    def __or__(self, other: TriangleMesh) -> TriangleMesh:
+        return self.union(other)
+    
+    def __mod__(self, other: TriangleMesh) -> TriangleMesh:
+        return self.difference(other)
+    
+    def __invert__(self) -> TriangleMesh:
+        return self.invert()
+    
+    def __eq__(self, other: TriangleMesh) -> bool:
+        if isinstance(other, type(self)):
+            return hash(self) == hash(other)
+        return False
+    
 
     def show(self, properties=True):
         import polyscope as ps

@@ -18,7 +18,8 @@ class Points(Array, Geometry):
         points: ArrayLike,
         **kwargs,
     ) -> Points:
-        self = super().__new__(cls, points, **kwargs)
+        # self = super().__new__(cls, points, **kwargs)
+        self = np.asarray(points).astype(np.float64).view(cls)
         if self.ndim != 2:
             raise ValueError(f"Points array must be 2D, got {self.ndim}D")
         return self

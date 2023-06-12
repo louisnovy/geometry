@@ -22,7 +22,8 @@ class SDT: # TODO: probably rename because this could be generalized
         # hsv[:, 1] = 1.0
         # hsv[:, 2] = 1.0
         # # colors = Colors.from_hsv(hsv)
-        return mesh.TriangleMesh(vertices * self.voxsize + self.bounds.min, faces, vertex_attributes=dict(normals=normals))
+        # return mesh.TriangleMesh(vertices * self.voxsize + self.bounds.min, faces, vertex_attributes=dict(normals=normals))
+        return mesh.TriangleMesh(vertices * self.voxsize + self.bounds.min, faces)
     
     def radius(self, radius: float, *, mode: str = "reflect", cval: float = 0.0) -> SDT:
         from scipy.ndimage import convolve
