@@ -33,6 +33,7 @@ class Array(np.ndarray):
     def __new__(cls, *args, **kwargs):
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
         self = np.array(*args, **kwargs).view(cls)
+        # self = np.asarray(*args, **kwargs).view(cls)
         # if not mutable:
         #     self.flags.writeable = False
         return self
