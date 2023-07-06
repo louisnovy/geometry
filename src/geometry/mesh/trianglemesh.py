@@ -113,6 +113,11 @@ class TriangleMesh(Geometry):
         """`int` : Number of `Edges` in the mesh."""
         return len(self.edges)
     
+    @cached_property
+    def n_components(self) -> int:
+        """`int` : Number of face-connected components in the mesh."""
+        return csgraph.connected_components(self.faces.adjacency.matrix, directed=False, return_labels=False)
+    
     @property
     def dim(self):
         """`int` : Number of dimensions of the mesh."""
@@ -154,12 +159,18 @@ class TriangleMesh(Geometry):
 
         The centroid is computed from the mean of face centroids weighted by their area.
         """
-        return (self.faces.centroids.T @ self.faces.areas / self.area).view(Array)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return (self.faces.centroids.T @ self.faces.areas / self.area).view(Array)
 
     @cached_property
     def aabb(self) -> AABB:
         """`AABB` : Axis-aligned bounding box of the mesh."""
         return self.vertices.aabb
+    
+    @property
+    def bounds(self) -> AABB:
+        """`AABB` : For a mesh the bounds are an alias for the axis-aligned bounding box."""
+        return self.aabb
 
     @property
     def is_empty(self) -> bool:
@@ -1836,6 +1847,22 @@ class Edges(Array):
         """`Points` of the midpoints of each edge."""
         vertices = self._mesh.vertices
         return Points((vertices[self[:, 0]] + vertices[self[:, 1]]) / 2)
+
+
+def concatenate(meshes: list[TriangleMesh]) -> TriangleMesh:
+    """Concatenate a list of meshes into a single mesh.
+    
+    Parameters
+    ----------
+    meshes : list of `TriangleMesh`
+        Meshes to concatenate.
+
+    Returns
+    -------
+    mesh : `TriangleMesh`
+        Concatenated mesh.
+    """
+    return type(meshes[0])().concatenate(meshes)
 
 
 def convex_hull(
