@@ -5,7 +5,7 @@ from struct import pack
 from pathlib import Path
 from .. import mesh
 
-extensions = [".stl", ".stla"]
+extensions = [".stl", ".stla", "stlb"]
 
 
 def save_binary(path: str | Path, vertices, faces, normals):

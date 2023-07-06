@@ -1,10 +1,9 @@
 from __future__ import annotations
-from typing import Iterable, Literal, Type
+from typing import Literal, Type, Optional, Generator
 from numpy.typing import ArrayLike
-from functools import cached_property, partial, partialmethod
+from functools import cached_property, partial
 
 import numpy as np
-import pickle
 from pathlib import Path
 from numpy import isclose
 from numpy.linalg import norm
@@ -15,7 +14,7 @@ import _geometry as bindings
 from ..points import Points
 from ..base import Geometry
 from ..bounds import AABB
-from ..utils import unique_rows, unitize
+from ..utils import unique_rows, unitize, Adjacency
 from ..formats import load_mesh as load, save_mesh as save
 from ..array import Array
 from .. import sdf
@@ -146,8 +145,8 @@ class TriangleMesh(Geometry):
 
         A mesh with more face area oriented outward than inward will have a positive volume.
         """
-        a, b, c = np.rollaxis(self.faces.corners, 1)
-        return np.sum(a * np.cross(b, c)) / 6
+        # centered so meshes that don't have a well defined volume are invariant to location/rotation
+        return np.sum((self.faces.corners[:, 0] - self.centroid) * self.faces.cross_products) / 6 #type: ignore
 
     @cached_property
     def centroid(self) -> Array:
@@ -204,11 +203,6 @@ class TriangleMesh(Geometry):
         """`bool` : True if the surface of the mesh is a 2-manifold with or without boundary."""
         return self.is_edge_manifold and self.is_vertex_manifold
 
-    @property
-    def is_planar(self) -> bool:
-        """`bool` : True if the mesh lies in a single plane."""
-        return self.vertices.is_planar
-
     @cached_property
     def is_self_intersecting(self) -> bool:
         """`bool` : True if the mesh has any self-intersecting faces."""
@@ -216,7 +210,7 @@ class TriangleMesh(Geometry):
 
     @cached_property
     def is_watertight(self) -> bool:
-        """`bool` : True if the mesh is a manifold, closed, oriented surface with no self-intersections."""
+        """`bool` : True if the mesh is made of manifold, closed, oriented surfaces with no self-intersections."""
         return self.is_manifold and self.is_closed and self.is_oriented and not self.is_self_intersecting
     
     @cached_property
@@ -231,14 +225,19 @@ class TriangleMesh(Geometry):
         if self.is_empty:
             class EmptyWindingNumberBVH:
                 def query(self, queries, accuracy):
-                    return np.full(len(queries), -np.inf)
+                    return np.full(len(queries), 0.0)
             return EmptyWindingNumberBVH()
 
         return bindings.WindingNumberBVH(self.vertices, self.faces, 2)
 
     @cached_property
     def _aabbtree(self):
-        if self.is_empty:
+        mesh = self
+
+        if not np.all(mesh.vertices.referenced):
+            mesh = mesh.remove_unreferenced_vertices()
+
+        if mesh.is_empty:
             class EmptyAABBTree:
                 def squared_distance(self, queries):
                     sqdists = np.full(len(queries), np.inf)
@@ -247,7 +246,7 @@ class TriangleMesh(Geometry):
                     return sqdists, face_indices, closest_points
             return EmptyAABBTree()
 
-        return bindings.AABBTree(self.vertices, self.faces)
+        return bindings.AABBTree(mesh.vertices, mesh.faces)
 
     def winding_number(self, queries: ArrayLike, exact=False) -> np.ndarray:
         """Compute the winding number at each query point with respect to the mesh.
@@ -256,6 +255,8 @@ class TriangleMesh(Geometry):
         ----------
         queries : `ArrayLike` (n_queries, dim)
             Query points.
+        exact : `bool`, optional
+            If True, compute the winding number exactly.
 
         Returns
         -------
@@ -264,27 +265,63 @@ class TriangleMesh(Geometry):
         """
         queries = np.asanyarray(queries, dtype=np.float64)
         if not queries.ndim == 2:
-            raise ValueError("`queries` must be a 2D array.")
-        
+            raise ValueError("`queries` must be a 2D `ArrayLike`.")
+
         if exact:
             return bindings.generalized_winding_number(self.vertices, self.faces, queries)
         
         return self._winding_number_bvh.query(queries, 2.3)
 
-    def contains(self, queries: ArrayLike, exact=False) -> np.ndarray:
-        """Check if each query point is inside the mesh.
+    def contains(self, queries: ArrayLike, threshold: float | None = None, exact=False) -> np.ndarray:
+        """Determine if each query point is contained by the mesh.
 
         Parameters
         ----------
         queries : `ArrayLike` (n_queries, dim)
             Query points.
+        threshold : `float`, optional (default: 0.5)
+            How enclosed must a point be to be considered contained.
+        exact : `bool`, optional (default: False)
+            If True, use exact winding number instead of a much faster approximation.
 
         Returns
         -------
         `ndarray (n_queries,)`
-            True if the query point is inside the mesh.
+            True if the query point is contained by the mesh.
+
+        Notes
+        -----
+        Approximate winding number accuracy decreases as abs(`threshold`) approaches 0.
         """
-        return self.winding_number(queries, exact=exact) > 0.5
+        queries = np.asanyarray(queries, dtype=np.float64)
+        if not queries.ndim == 2:
+            raise ValueError("`queries` must be a 2D `ArrayLike`.")
+
+        threshold = 0.5 if threshold is None else threshold
+        inverted = self.volume < 0
+
+        if inverted:
+            threshold *= -1
+
+        def is_inside(queries):
+            return self.winding_number(queries, exact=exact) > threshold
+        
+        if not inverted and threshold >= 0.5:
+            in_bounds = self.aabb.contains(queries)
+            
+            if np.all(in_bounds):
+                return is_inside(queries)
+
+            contained = np.full(len(queries), False)
+
+            if not np.any(in_bounds):
+                return contained
+
+            contained[in_bounds] = is_inside(queries[in_bounds])
+
+            return contained
+        
+        return is_inside(queries)
 
     def _distance(
         self,
@@ -296,17 +333,15 @@ class TriangleMesh(Geometry):
     ):
         queries = np.asanyarray(queries, dtype=np.float64)
         if not queries.ndim == 2:
-            raise ValueError("`queries` must be a 2D array.")
+            raise ValueError("`queries` must be a 2D `ArrayLike`.")
 
         # we could probably pass in flags to the C++ code, but this is a lot easier for now
         # and is probably not actually degrading performance that much. the results of this
         # use shared memory with the Eigen matrices so overhead should be minimal.
-        sqdists, indices, closest = self._aabbtree.squared_distance(queries)
+        dists, indices, closest = self._aabbtree.squared_distance(queries)
 
-        if squared:
-            dists = sqdists
-        else:
-            dists = np.sqrt(sqdists)
+        if not squared:
+            dists **= 0.5
         
         if signed:
             dists[self.contains(queries)] *= -1
@@ -323,7 +358,7 @@ class TriangleMesh(Geometry):
     
     @cached_property
     def distance(self):
-        """`SDF` of the distance from each query to the surface of the mesh.
+        """Callable `SDF` that computes the distance from each query to the surface of the mesh.
         
         Parameters
         ----------
@@ -332,7 +367,7 @@ class TriangleMesh(Geometry):
         squared : `bool`, optional
             If True, return squared distances.
         signed : `bool`, optional
-            If True, distances inside the mesh will be negative.
+            If True, distances corresponding to queries contained by the mesh will be negative.
         return_index : `bool`, optional
             If True, also return the index of the closest face for each query point.
         return_closest : `bool`, optional
@@ -347,45 +382,49 @@ class TriangleMesh(Geometry):
 
         `ndarray (n_queries,)` (optional)
             Index of the closest face for each query point.
-        `Points (n_queries,)` (optional)
+        `Points (n_queries, dim)` (optional)
             Closest point on the surface of the mesh for each query point.
+
+        Notes
+        -----
+        If called on an empty mesh, returns `inf` for distances, `-1` for face indices and `inf` for closest points.
         """
         return sdf.SDF(self._distance, self.aabb)
 
     @cached_property
     def signed_distance(self):
-        """`SDF` of the signed distance from each query to the surface of the mesh.
+        """Callable `SDF` of the signed distance from each query to the surface of the mesh.
         This is an alias for `mesh.distance(signed=True)`.
         """
         return sdf.SDF(partial(self._distance, signed=True), self.aabb)
     
     @cached_property
     def sdf(self):
-        """`SDF` of the signed distance from each query to the surface of the mesh.
+        """Callable `SDF` of the signed distance from each query to the surface of the mesh.
         This is an alias for `mesh.signed_distance`.
         """
         return self.signed_distance
-
+    
     def sample_surface(
         self,
         n_samples: int,
-        return_index: bool = False,
-        barycentric_weights = (1, 1, 1),
         face_weights = None,
+        barycentric_weights = (1, 1, 1),
+        return_index: bool = False,
         seed: int | None = None,
-    ) -> Points | tuple[Points, Array]:
+    ) -> Points | tuple[Points, np.ndarray]:
         """Sample points on the surface of the mesh.
         
         Parameters
         ----------
         n_samples : `int`
             Number of samples to generate.
-        return_index : `bool`, optional
-            If True, also return the index of the face that each sample was mapped to.
-        barycentric_weights : `tuple[float, float, float]`, optional
-            Weights for sampling barycentric coordinates. The default is uniform sampling.
         face_weights : `ndarray (n_faces,)`, optional
             Probability distribution for sampling faces. The default is uniform sampling.
+        barycentric_weights : `tuple[float, float, float]`, optional
+            Weights for sampling barycentric coordinates on the simplex. The default is uniform sampling.
+        return_index : `bool`, optional
+            If True, also return the index of the face that each sample was mapped to.
         seed : `int`, optional
             Random seed for reproducible results.
 
@@ -404,14 +443,14 @@ class TriangleMesh(Geometry):
             face_weights = self.faces.double_areas
         else:
             face_weights = np.asarray(face_weights)
-            if not face_weights.ndim == 1 and len(face_weights) == len(self.faces):
+            if any([face_weights.ndim != 1, len(face_weights) != len(self.faces)]):
                 raise ValueError(
-                    "face_weights must be a 1D array with length equal to the number of faces."
-                    f"face_weights.shape = {face_weights.shape}, faces.shape = {self.faces.shape}"
+                    "face_weights must be a 1D array with length equal to the number of faces. "
+                    f"got face_weights.shape = {face_weights.shape}, faces.shape = {self.faces.shape}"
                 )
 
-        face_weights /= face_weights.sum()
-        
+        face_weights = face_weights / face_weights.sum()
+
         rng = np.random.default_rng(seed)
         # distribute samples on the simplex
         barycentric = rng.dirichlet(barycentric_weights, size=n_samples)
@@ -419,17 +458,14 @@ class TriangleMesh(Geometry):
         face_indices = np.searchsorted(np.cumsum(face_weights), rng.random(n_samples))
         # map samples on the simplex to each face with a linear combination of the face's corners
         samples = np.einsum("ij,ijk->ik", barycentric, self.faces.corners[face_indices])
-        if self.vertices.colors is not None:
-            colors = np.einsum("ij,ijk->ik", barycentric, self.vertices.colors[self.faces[face_indices]])
-        else:
-            colors = None
+
         points = samples.view(Points)
         return (points, face_indices) if return_index else points
     
     # *** Transformations ***
 
     def transform(self, matrix: ArrayLike) -> TriangleMesh:
-        """Transform the mesh by applying the given transformation matrix to its vertices.
+        """Transform the mesh by applying the given transformation matrix to its geometry.
 
         Parameters
         ----------
@@ -536,13 +572,13 @@ class TriangleMesh(Geometry):
         return self.transform(mat)
 
     # TODO: maybe name offset?
-    def dilate(self, offset: float = 0) -> TriangleMesh:
+    def dilate(self, offset: float) -> TriangleMesh:
         """Dilate the mesh by moving each vertex along its normal by the given offset.
 
         Parameters
         ----------
-        offset : `float`, optional
-            Offset to move each vertex along its normal. The default is 0.
+        offset : `float` 
+            How far to move each vertex along its normal.
 
         Returns
         -------
@@ -556,13 +592,25 @@ class TriangleMesh(Geometry):
         return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
     
     def invert(self) -> TriangleMesh:
-        """Invert the mesh by reversing the order of the vertices in each face causing
-        the normals to point in the opposite direction.
+        """Invert the mesh. This is equivalent to using the unary `~` operator.
 
         Returns
         -------
         `TriangleMesh`
             Inverted mesh.
+
+        Examples
+        --------
+        >>> A.volume
+        2043.0214
+        >>> A.invert().volume
+        -2043.0214
+        >>> assert ~A == A.invert() # unary ~ operator
+        >>> assert ~(~A) == A  # double negation
+        >>> A & B  # intersection
+        >>> A & ~B  # difference
+        >>> assert ~(~A & ~B) == A | B # union
+        >>> assert ~(A & B) == ~A | ~B  # De Morgan's laws apply
         """
         return type(self)(self.vertices, self.faces[:, ::-1])
 
@@ -614,7 +662,7 @@ class TriangleMesh(Geometry):
             Number of rings to select. If 0, only the faces in `face_indices` are selected.
             If 1, the faces in `face_indices` and their neighbors are selected, and so on.
         invert : `bool`, optional (default: False)
-            If True, return unselected faces instead of selected faces.
+            If True, use unselected faces instead of selected faces.
 
         Returns
         -------
@@ -624,20 +672,19 @@ class TriangleMesh(Geometry):
         face_indices = np.asanyarray(face_indices)
 
         # if no selection, return empty mesh
-        if not np.any(face_indices):
+        if not face_indices.size:
             return type(self)(np.empty((0, self.dim)), np.empty((0, self.dim), dtype=int))
 
         if rings > 0:
-            # TODO: do this with sparse matrix ops instead?
-            incidence_list = self.vertices.incidence_list # (n_vertices, n_face_neighbors)
-            already_checked = np.zeros(self.n_faces, dtype=bool)
+            incidence = self.vertices.incidence # (n_vertices, n_face_neighbors)
+            already_checked = np.full(self.n_faces, False)
             temp = face_indices
             for _ in range(rings):
                 if not temp.size:
                     # we have a fully connected selection
                     break
                 # get all neighbors of the current faces
-                neighbors = np.concatenate([incidence_list[i] for i in self.faces[temp].ravel()])
+                neighbors = np.concatenate([incidence[i] for i in self.faces[temp].ravel()])
                 # don't include faces that have already been checked
                 temp = np.unique(neighbors[~already_checked[neighbors]])
                 already_checked[temp] = True
@@ -679,9 +726,8 @@ class TriangleMesh(Geometry):
 
         return type(self)(vertices, faces)
         
-    # TODO: should be called merge_close_vertices?
     def remove_duplicated_vertices(self, epsilon: float = 0) -> TriangleMesh:
-        """Remove duplicate vertices closer than rounding error 'epsilon'.
+        """Remove duplicated vertices closer than rounding error 'epsilon'.
         
         Parameters
         ----------
@@ -691,12 +737,12 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Mesh with duplicate vertices removed.
+            Mesh with duplicated vertices removed.
 
         Notes
         -----
         This will NOT remove faces and only renumbers them creating
-        duplicate and degenerate faces if epsilon is not kept in check.
+        duplicated and degenerated faces if epsilon is not kept in check.
         """
         vertices, faces = self.vertices, self.faces
 
@@ -708,22 +754,20 @@ class TriangleMesh(Geometry):
         unique, inverse = unique_rows(vertices, return_inverse=True)
         return type(self)(unique, inverse[faces])
     
-    def remove_small_faces(self, epsilon: float = 1e-12) -> TriangleMesh:
-        """Remove faces with area smaller than 'epsilon'.
+    def remove_degenerated_faces(self, epsilon: float = 1e-12) -> TriangleMesh:
+        """Remove degenerated faces and update connectivity.
 
         Parameters
         ----------
-        epsilon : `float`, optional (default: 0)
-            Area threshold.
+        epsilon : `float`, optional (default: 1e-12)
+            Tolerance for face area to be considered degenerated.
 
         Returns
         -------
         `TriangleMesh`
-            Mesh with small faces removed.
+            Mesh with degenerated faces removed.
         """
         raise NotImplementedError
-        # faces = bindings.collapse_small_triangles(self.vertices, self.faces, epsilon)
-        # return type(self)(self.vertices, faces)
     
     def remove_duplicated_faces(self) -> TriangleMesh:
         """Remove duplicate faces.
@@ -753,23 +797,57 @@ class TriangleMesh(Geometry):
     
     # *** Remeshing ***
 
-    def resolve_self_intersections(self) -> TriangleMesh:
-        """Resolve self-intersections by creating new edges where faces intersect.
+    def resolve_self_intersections(self, stitch=True) -> TriangleMesh:
+        """Resolve self-intersections by creating new edges where faces intersect and
+        (by default) stitching together overlapping components.
+
+        Parameters
+        ----------
+        stitch : `bool`, optional (default: True)
+            Stitch together overlapping components into connected components by merging vertices at the overlap.
+            If False, preserves the original mesh topology (output will have duplicated vertices where original faces intersect).
 
         Returns
         -------
         `TriangleMesh`
             Mesh with self-intersections resolved.
         """
-        vertices, faces, intersecting_faces, birth_faces, unique_vertices = bindings.remesh_self_intersections(
+        resolved_vertices, resolved_faces, _, _, _ = bindings.remesh_self_intersections(
             self.vertices,
             self.faces,
-            stitch_all=True,
+            stitch_all=stitch,
         )
-        out = type(self)(vertices, faces)
-        return out
 
-    
+        return type(self)(resolved_vertices, resolved_faces)
+
+    # def resolve_self_intersections(self, face_indices: ArrayLike | None = None, stitch=True) -> TriangleMesh:
+    #     """Resolve self-intersections by creating new edges where faces intersect and
+    #     (by default) stitching together overlapping components.
+
+    #     Parameters
+    #     ----------
+    #     face_indices : `ArrayLike`, optional (default: None)
+    #         Specify faces to resolve self-intersections for. If None, all faces are considered.
+    #     stitch : `bool`, optional (default: True)
+    #         Stitch together overlapping components into connected components by merging vertices at the overlap.
+    #         If False, preserves the original mesh topology (output will have duplicated vertices where original faces intersect).
+
+    #     Returns
+    #     -------
+    #     `TriangleMesh`
+    #         Mesh with self-intersections resolved.
+    #     """
+    #     resolve = lambda v, f: bindings.remesh_self_intersections(
+    #         v,
+    #         f,
+    #         stitch_all=stitch,
+    #     )
+
+    #     if face_indices is None:
+    #         return type(self)(*resolve(self.vertices, self.faces)[0:2])
+    #     else:
+
+
     def collapse_short_edges(self, length: float | None = None) -> TriangleMesh:
         """Collapse edges shorter than 'length'.
 
@@ -868,17 +946,18 @@ class TriangleMesh(Geometry):
         """
         m = self
         if connectivity == "face":
-            adjacency = m.faces.adjacency_matrix
+            matrix = m.faces.adjacency.matrix
             get_indices = lambda i: i == labels
         elif connectivity == "vertex":
-            m = m.remove_unreferenced_vertices()
-            adjacency = m.vertices.adjacency_matrix
+            if not np.all(m.vertices.referenced):
+                m = m.remove_unreferenced_vertices()
+            matrix = m.vertices.adjacency.matrix
             # at least one vertex in common
             get_indices = lambda i: np.any(i == labels[m.faces], axis=1)
         else:
             raise ValueError(f"Unknown connectivity method: {connectivity}")
         
-        n_components, labels = csgraph.connected_components(adjacency, directed=False)
+        n_components, labels = csgraph.connected_components(matrix, directed=False)
         return [m.submesh(np.flatnonzero(get_indices(i))) for i in range(n_components)]
 
     def extract_cells(self, outer_only=False) -> list[TriangleMesh]:
@@ -888,35 +967,44 @@ class TriangleMesh(Geometry):
         Parameters
         ----------
         outer_only : `bool`, optional (default: False)
-            If True, only return cells connected to infinity.
+            If True, only return cell enclosing infinity.
         
         Returns
         -------
         `list[TriangleMesh]`
             List of cell meshes.
         """
-        labels = bindings.extract_cells(self.vertices, self.faces)
+
+        m = self
+
+        degenerate_faces = m.faces.degenerated
+        if np.any(degenerate_faces):
+            # TODO: warnings?
+            m = m.submesh(~degenerate_faces)
+
+        labels = bindings.extract_cells(m.vertices, m.faces)
 
         out = []
         n_components = labels.max() + 1
         for i in range(n_components):
             if outer_only and not 0 in labels[labels == i]:
+            # if outer_only and not np.any(labels == i):
                 continue
 
             # only keep faces that are part of this cell
             to_keep = np.any(labels == i, axis=1)
-            these_faces = self.faces[to_keep]
+            these_faces = m.faces[to_keep]
             these_labels = labels[to_keep]
 
             flipped = these_labels[:, 0] == i
             these_faces[flipped] = these_faces[flipped][:, ::-1]
 
-            out.append(type(self)(self.vertices, these_faces).remove_unreferenced_vertices())
+            out.append(type(m)(m.vertices, these_faces).remove_unreferenced_vertices())
 
         return [c for c in out if not c.is_empty]
 
     def outer_hull(self) -> TriangleMesh:
-        """Compute the outer hull by resolving intersections and combining cells connected to infinity.
+        """Compute the outer hull by resolving intersections and finding cell enclosing infinity.
 
         Returns
         -------
@@ -925,8 +1013,21 @@ class TriangleMesh(Geometry):
         """
         return type(self)().concatenate(self.resolve_self_intersections().extract_cells(outer_only=True)).invert()
     
-    def check_intersection(self, other: TriangleMesh, return_index: bool = False) -> tuple[bool, np.ndarray] | bool:
-        """Detect if the mesh intersects with another mesh. Self-intersections are ignored.
+    def unstitch(self) -> TriangleMesh:
+        """Unstitch all faces into separate components.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Unstitched mesh.
+        """
+        corners = self.faces.corners
+        vertices = corners.reshape(-1, corners.shape[-1])
+        faces = np.arange(len(vertices)).reshape(-1, 3)
+        return type(self)(vertices, faces)
+    
+    def detect_intersection(self, other: TriangleMesh, return_index: bool = False) -> tuple[bool, np.ndarray] | bool:
+        """Detect intersection with another mesh. Self-intersections are ignored.
 
         Parameters
         ----------
@@ -951,7 +1052,7 @@ class TriangleMesh(Geometry):
         A mesh totally contained in another mesh will not be detected if no faces actually intersect.
         """
         # fail fast if aabbs don't intersect
-        if not self.aabb.check_intersection(other.aabb):
+        if not self.aabb.detect_intersection(other.aabb):
             if return_index:
                 return False, np.empty((0, 2), dtype=np.int32)
             return False
@@ -983,19 +1084,28 @@ class TriangleMesh(Geometry):
         operation: Literal["union", "intersection", "difference"],
         clip: bool = False,
         cull: bool = False,
-        wn_threshold: float = 0.5,
-    ):
+        threshold: float | None = None,
+        exact: bool = False,
+    ):  
+        if operation == "union":
+            if other.is_empty:
+                return type(self)(self.vertices, self.faces)
+        elif operation == "intersection":
+            if other.is_empty:
+                return type(self)()
+        elif operation == "difference":
+            if other.is_empty:
+                return type(self)(self.vertices, self.faces)
+            other = ~other
+        else:
+            raise ValueError(f"Unsupported operation: {operation}")
 
         if cull:
             A = self
             B = other
-            def inside(mesh: TriangleMesh, other: TriangleMesh, invert=False):
-                # check all corners
-                inside = other.contains(mesh.faces.corners.reshape(-1, 3)).reshape(-1, 3)
-                # either all or none
-                return mesh.submesh(~np.any(inside, axis=1) if invert else np.all(inside, axis=1))
         else:
-            _, intersecting_face_pairs = self.check_intersection(other, return_index=True)
+            # only resolve intersecting faces between meshes instead of all self-intersections
+            _, intersecting_face_pairs = self.detect_intersection(other, return_index=True)
             
             a_intersections = np.in1d(np.arange(self.n_faces), intersecting_face_pairs[:, 0])
             b_intersections = np.in1d(np.arange(other.n_faces), intersecting_face_pairs[:, 1])
@@ -1015,42 +1125,31 @@ class TriangleMesh(Geometry):
 
             A = resolved.submesh(from_a) + self.submesh(~a_intersections)
             B = resolved.submesh(~from_a) + other.submesh(~b_intersections)
-
-            def inside(a: TriangleMesh, b: TriangleMesh, invert=False):
-                # print(a.faces.centroids.shape, b.faces.centroids.shape)
-                # inside = b.contains(a.faces.centroids, exact=True)
-                # inside = b.contains(a.faces.centroids)
-                inside = b.winding_number(a.faces.centroids) > wn_threshold
-                # indices = (inside if not invert else ~inside) & ~a.faces.degenerated
-                indices = (inside if not invert else ~inside)
-                return a.submesh(indices)
-
-        if operation == "union":
-            # only keep faces outside both meshes
-            a = inside(A, B, invert=True)
-            if clip:
-                return a.remove_duplicated_vertices()
-            b = inside(B, A, invert=True)
-        elif operation == "intersection":
-            # only keep faces inside both meshes
-            a = inside(A, B)
-            if clip:
-                return a.remove_duplicated_vertices()
-            b = inside(B, A)
-        elif operation == "difference":
-            # only keep faces inside A and outside B
-            a = inside(A, B, invert=True)
-            if clip:
-                return a.remove_duplicated_vertices()
-            # invert because B surface is now part of A
-            b = inside(B, A).invert()
-        elif operation == "cut":
-            # just return the resolved a
-            return A.remove_duplicated_vertices()
-        else:
-            raise ValueError("Invalid boolean operation")
         
-        return (a + b).remove_duplicated_vertices()
+        # a, b = A, B.dilate(0.001 * np.sign(B.volume))
+        a, b = A, B
+
+        def select_faces(a: TriangleMesh, b: TriangleMesh, jog=False):
+            if cull:
+                all_corners = a.faces.corners.reshape(-1, 3)
+                inside_corners = b.contains(all_corners, threshold=threshold, exact=exact)
+                selection = np.any(inside_corners.reshape(-1, 3), axis=1)
+            else:
+                selection = b.contains(a.faces.centroids, threshold=threshold, exact=exact)
+
+            if operation == "union":
+                return ~selection
+            
+            return selection
+
+        
+        res = A.submesh(select_faces(a, b))
+
+        if not clip:
+            res += B.submesh(select_faces(b, a))
+        
+        return res.remove_duplicated_vertices()
+    
     
     def union(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
         """Compute the union of two meshes.
@@ -1140,19 +1239,13 @@ class TriangleMesh(Geometry):
     def __truediv__(self, other: float) -> TriangleMesh:
         return self.scale(1 / other)
 
-    def __add__(self, other: ArrayLike | TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
-        try:
-            return self.translate(other) # type: ignore
-        except TypeError:
-            return self.concatenate(other) # type: ignore
+    def __add__(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
+        return self.concatenate(other)
 
     def __radd__(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
         if other == 0:
             return self
         return self + other
-    
-    def __sub__(self, other: ArrayLike | TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
-        return self.__add__(-other) # type: ignore
     
     def __and__(self, other: TriangleMesh) -> TriangleMesh:
         return self.intersection(other)
@@ -1160,11 +1253,18 @@ class TriangleMesh(Geometry):
     def __or__(self, other: TriangleMesh) -> TriangleMesh:
         return self.union(other)
     
-    def __mod__(self, other: TriangleMesh) -> TriangleMesh:
-        return self.difference(other)
-    
     def __invert__(self) -> TriangleMesh:
         return self.invert()
+    
+    def __pos__(self) -> TriangleMesh:
+        if np.sign(self.volume) == -1:
+            return self.invert()
+        return type(self)(self.vertices, self.faces)
+    
+    def __neg__(self) -> TriangleMesh:
+        if np.sign(self.volume) == 1:
+            return self.invert()
+        return type(self)(self.vertices, self.faces)
     
     def __eq__(self, other: TriangleMesh) -> bool:
         if isinstance(other, type(self)):
@@ -1172,16 +1272,48 @@ class TriangleMesh(Geometry):
         return False
     
 
-    def show(self, properties=True):
+    # def show(self, properties=True):
+    #     import polyscope as ps
+
+    #     ps.init()
+    #     ps.set_up_dir("z_up")
+    #     mesh = ps.register_surface_mesh("mesh", self.vertices, self.faces)
+    #     mesh.set_back_face_policy("custom")
+    #     if not properties:
+    #         ps.show()
+    #         return
+    #     # mesh.add_color_quantity("vertex_colors", self.vertices.colors)
+    #     mesh.add_vector_quantity("vertex_normals", self.vertices.normals)
+    #     mesh.add_scalar_quantity("vertex_areas", self.vertices.areas)
+    #     mesh.add_scalar_quantity("vertex_voronoi_areas", self.vertices.voronoi_areas)
+    #     mesh.add_scalar_quantity("angle_defects", self.vertices.angle_defects)
+    #     mesh.add_vector_quantity("face_normals", self.faces.normals, defined_on="faces")
+    #     mesh.add_scalar_quantity("face_areas", self.faces.areas, defined_on="faces")
+    #     mesh.add_scalar_quantity("faces_obtuse", self.faces.obtuse, defined_on="faces")
+    #     mesh.add_scalar_quantity("faces_acute", self.faces.acute, defined_on="faces")
+    #     mesh.add_scalar_quantity("faces_right", self.faces.right, defined_on="faces")
+    #     mesh.add_scalar_quantity("faces_self_intersecting", self.faces.self_intersecting, defined_on="faces")
+
+    #     edges = ps.register_curve_network("edges", self.vertices, self.edges)
+    #     edges.add_scalar_quantity("vertex_valences", self.vertices.valences)
+    #     edges.add_scalar_quantity("edge_valences", self.edges.valences, defined_on="edges")
+    #     edges.add_scalar_quantity("edge_lengths", self.edges.lengths, defined_on="edges")
+    #     edges.add_vector_quantity("vertex_normals", self.vertices.normals)
+    #     edges.set_radius(0.001)
+    #     edges.set_enabled(False)
+
+    #     ps.show()
+
+    def plot(self, name=None, properties=True):
         import polyscope as ps
 
         ps.init()
         ps.set_up_dir("z_up")
-        mesh = ps.register_surface_mesh("mesh", self.vertices, self.faces)
+        mesh = ps.register_surface_mesh(name or str(id(self)), self.vertices, self.faces)
         mesh.set_back_face_policy("custom")
         if not properties:
-            ps.show()
-            return
+            return self
+        
         # mesh.add_color_quantity("vertex_colors", self.vertices.colors)
         mesh.add_vector_quantity("vertex_normals", self.vertices.normals)
         mesh.add_scalar_quantity("vertex_areas", self.vertices.areas)
@@ -1202,6 +1334,11 @@ class TriangleMesh(Geometry):
         edges.set_radius(0.001)
         edges.set_enabled(False)
 
+        return self
+
+    def show(self, name=None, properties=True):
+        self.plot(name, properties)
+        import polyscope as ps
         ps.show()
     
 
@@ -1221,45 +1358,64 @@ class Vertices(Points):
     def _mesh(self) -> TriangleMesh:
         raise AttributeError("Vertices must be attached to a mesh.")
 
-    @cached_property
-    def adjacency_matrix(self) -> csr_array:
-        """`csr_array (n_vertices, n_vertices)` : Vertex adjacency matrix.
+    # @cached_property
+    # def adjacency_matrix(self) -> csr_array:
+    #     """`csr_array (n_vertices, n_vertices)` : Vertex adjacency matrix.
 
-        The adjacency matrix is a square matrix with a row and column for each vertex.
-        The value of each entry is True if the corresponding vertices are connected by an edge.
-        """
+    #     The adjacency matrix is a square matrix with a row and column for each vertex.
+    #     The value of each entry is True if the corresponding vertices are connected by an edge.
+    #     """
+    #     edges = self._mesh.halfedges.reshape(-1, 2)
+    #     n_vertices = len(self)
+    #     data = np.ones(len(edges), dtype=bool)
+    #     return csr_array((data, edges.T), shape=(n_vertices, n_vertices))
+
+    @cached_property
+    def adjacency(self):
         edges = self._mesh.halfedges.reshape(-1, 2)
         n_vertices = len(self)
         data = np.ones(len(edges), dtype=bool)
-        return csr_array((data, edges.T), shape=(n_vertices, n_vertices))
+        matrix = csr_array((data, edges.T), shape=(n_vertices, n_vertices))
+        return Adjacency(matrix)
+    
+    # @cached_property
+    # def adjacency_list(self) -> list[np.ndarray]:
+    #     """`list[np.ndarray]` : Neighboring vertex indices for each vertex."""
+    #     adjacency = self.adjacency_matrix
+    #     # using the list comprehension is much faster than converting to a linked list in this case
+    #     return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
 
+    # @cached_property
+    # def incidence_matrix(self) -> csr_array:
+    #     """`csr_array (n_vertices, n_faces)` : Vertex incidence matrix.
+
+    #     The incidence matrix is a matrix with a row for each vertex and a column for each face.
+    #     The value of each entry is True if the corresponding vertex is incident to the corresponding face.
+    #     """
+    #     faces = self._mesh.faces
+    #     row = faces.ravel()
+    #     # repeat for each vertex in face
+    #     col = np.repeat(np.arange(len(faces)), faces.shape[1])
+    #     data = np.ones(len(row), dtype=bool)
+    #     shape = (len(self), len(faces))
+    #     return csr_array((data, (row, col)), shape=shape)
+
+    # @cached_property
+    # def incidence_list(self) -> list[np.ndarray]:
+    #     """`list[np.ndarray]` : Incident face indices for each vertex."""
+    #     incidence = self.incidence_matrix
+    #     return [incidence.indices[incidence.indptr[i] : incidence.indptr[i + 1]] for i in range(len(self))]
+    
     @cached_property
-    def adjacency_list(self) -> list[np.ndarray]:
-        """`list[np.ndarray]` : Neighboring vertex indices for each vertex."""
-        adjacency = self.adjacency_matrix
-        # using the list comprehension is much faster than converting to a linked list in this case
-        return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
-
-    @cached_property
-    def incidence_matrix(self) -> csr_array:
-        """`csr_array (n_vertices, n_faces)` : Vertex incidence matrix.
-
-        The incidence matrix is a matrix with a row for each vertex and a column for each face.
-        The value of each entry is True if the corresponding vertex is incident to the corresponding face.
-        """
+    def incidence(self):
         faces = self._mesh.faces
         row = faces.ravel()
         # repeat for each vertex in face
         col = np.repeat(np.arange(len(faces)), faces.shape[1])
         data = np.ones(len(row), dtype=bool)
         shape = (len(self), len(faces))
-        return csr_array((data, (row, col)), shape=shape)
-
-    @cached_property
-    def incidence_list(self) -> list[np.ndarray]:
-        """`list[np.ndarray]` : Incident face indices for each vertex."""
-        incidence = self.incidence_matrix
-        return [incidence.indices[incidence.indptr[i] : incidence.indptr[i + 1]] for i in range(len(self))]
+        matrix = csr_array((data, (row, col)), shape=shape)
+        return Adjacency(matrix)
 
     # TODO: replace with angle weighted normals?
     @cached_property
@@ -1270,7 +1426,7 @@ class Vertices(Points):
         """
         faces = self._mesh.faces
         # since we are about to unitize next we can simply multiply by area
-        vertex_normals = self.incidence_matrix @ (faces.normals * faces.double_areas[:, None])
+        vertex_normals = self.incidence.matrix @ (faces.normals * faces.double_areas[:, None])
         return unitize(vertex_normals)
 
     @cached_property
@@ -1283,11 +1439,11 @@ class Vertices(Points):
         >>> m = ico_sphere()
         >>> assert np.allclose(m.vertices.areas.sum(), m.area)
         """
-        return self.incidence_matrix @ self._mesh.faces.areas / 3
+        return self.incidence.matrix @ self._mesh.faces.areas / 3
 
     @cached_property
     def voronoi_areas(self) -> np.ndarray:
-        """`ndarray (n,)` : Areas of the voronoi cells around each vertex.
+        """`ndarray (n,)` : Areas of the voronoi cells on the surface around each vertex.
         
         The area of the voronoi cell around a vertex is equal to the area of the dual face.
         The sum of the voronoi areas is equal to the surface area of the mesh.
@@ -1318,12 +1474,12 @@ class Vertices(Points):
         5.981308411214953
         5.995316159250586
         """
-        return self.adjacency_matrix.sum(axis=0)
+        return self.adjacency.matrix.sum(axis=0)
 
     @cached_property
     def referenced(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each vertex is part of a face."""
-        referenced = np.zeros(len(self), dtype=bool)
+        referenced = np.full(len(self), False)
         referenced[self._mesh.faces] = True
         return referenced
 
@@ -1331,7 +1487,7 @@ class Vertices(Points):
     def boundaries(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each vertex is on a boundary."""
         edges = self._mesh.edges
-        boundaries = np.zeros(len(self), dtype=bool)
+        boundaries = np.full(len(self), False)
         boundaries[edges[edges.boundaries]] = True
         return boundaries
 
@@ -1359,6 +1515,36 @@ class Vertices(Points):
         return np.cov(self, rowvar=False)
 
 
+# class Faces:
+#     def __init__(
+#         self,
+#         faces: ArrayLike | None = None,
+#         mesh: TriangleMesh | None = None,
+#     ):
+#         if faces is None:
+#             faces = np.empty((0, 3), dtype=np.int32)
+#         self._data = np.asarray(faces, dtype=np.int32)
+#         self._mesh = mesh
+
+#     def __array__(self, dtype=None) -> np.ndarray:
+#         return self._data
+    
+#     def __len__(self) -> int:
+#         return len(self._data)
+    
+#     def __getitem__(self, index: int | slice | np.ndarray) -> np.ndarray:
+#         return self._data[index]
+    
+#     def __setitem__(self, index: int | slice | np.ndarray, value: np.ndarray) -> None:
+#         self._data[index] = value
+
+#     def __repr__(self) -> str:
+#         return repr(self._data).replace("array", type(self).__name__)
+    
+#     @property
+#     def shape(self):
+#         return self._data.shape
+
 class Faces(Array):
     def __new__(
         cls,
@@ -1373,25 +1559,29 @@ class Faces(Array):
             raise ValueError("Faces must be triangles.")
         return self
 
-    @cached_property
-    def _mesh(self) -> TriangleMesh:
-        raise AttributeError("Faces must be attached to a mesh.")
+    # @cached_property
+    # def adjacency_matrix(self) -> csr_array:
+    #     """`csr_array (n_faces, n_faces)` : Face adjacency matrix.
+
+    #     Square matrix where each row and column corresponds to a face.
+    #     """
+    #     # TODO: we don't need to use the binding once we have the edge mappings working
+    #     # this should actually speed things up a bit
+    #     return bindings.facet_adjacency_matrix(self).astype(bool)
+
+    # @cached_property
+    # def adjacency_list(self) -> list[np.ndarray]:
+    #     """`list[ndarray]` : Neighboring face indices for each face."""
+    #     adjacency = self.adjacency_matrix
+    #     return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
     
     @cached_property
-    def adjacency_matrix(self) -> csr_array:
-        """`csr_array (n_faces, n_faces)` : Face adjacency matrix.
-
-        Square matrix where each row and column corresponds to a face.
-        """
+    def adjacency(self):
+        """`Adjacency` : Neighboring face indices for each face."""
         # TODO: we don't need to use the binding once we have the edge mappings working
         # this should actually speed things up a bit
-        return bindings.facet_adjacency_matrix(self)
-
-    @cached_property
-    def adjacency_list(self) -> list[np.ndarray]:
-        """`list[ndarray]` : Neighboring face indices for each face."""
-        adjacency = self.adjacency_matrix
-        return [adjacency.indices[adjacency.indptr[i] : adjacency.indptr[i + 1]] for i in range(len(self))]
+        matrix = bindings.facet_adjacency_matrix(self).astype(bool)
+        return Adjacency(matrix)
 
     @cached_property
     def corners(self) -> np.ndarray:
@@ -1410,6 +1600,8 @@ class Faces(Array):
         res[:, 1] = np.arccos(np.clip(np.einsum("ij,ij->i", -u, w), -1, 1))
         # complement angle so we can take a shortcut
         res[:, 2] = np.pi - res[:, 0] - res[:, 1]
+        # degenerate case
+        res[np.any(res == 0, axis=1), :] = 0
         return res
 
     @cached_property
@@ -1421,18 +1613,10 @@ class Faces(Array):
         return cot
 
     @cached_property
-    def centroids(self) -> Points:
-        """`Points (n, dim)` : Centroid of each face."""
-        return Points(self.corners.mean(axis=1))
-
-    @cached_property
     def cross_products(self) -> np.ndarray:
         """`ndarray (n, 3)` : Cross product of each face."""
-        vertices, faces = self._mesh.vertices, self
-        return np.cross(
-            vertices[faces[:, 1]] - vertices[faces[:, 0]],
-            vertices[faces[:, 2]] - vertices[faces[:, 0]],
-        )
+        v = np.diff(self.corners, axis=1)
+        return np.cross(v[:, 0], v[:, 1])
 
     @cached_property
     def double_areas(self) -> np.ndarray:
@@ -1453,9 +1637,8 @@ class Faces(Array):
         sq_el = self.edge_lengths_squared
         cot = self.cotangents
         areas = self.areas
-        num_faces = len(self)
 
-        res = np.zeros((num_faces, 3), dtype=np.float64)
+        res = np.zeros((len(self), 3), dtype=np.float64)
 
         for i in range(3):
             # the other two edges
@@ -1465,7 +1648,7 @@ class Faces(Array):
             sum_a = sq_el[:, a] * cot[:, a]
             sum_b = sq_el[:, b] * cot[:, b]
             # this portion of the area is 1/8 of the sum
-            res[:, i] = 0.125 * (sum_a + sum_b)
+            res[:, i] = (sum_a + sum_b) / 8.0
 
         weights = np.array([[0.5, 0.25, 0.25],
                             [0.25, 0.5, 0.25],
@@ -1480,8 +1663,7 @@ class Faces(Array):
 
     @cached_property
     def degenerated(self) -> np.ndarray:
-        """`ndarray (n,)` : Whether each face is degenerated (has zero area).
-        This can happen if two vertices are the same, or if all three vertices are colinear."""
+        """`ndarray (n,)` : Whether each face is degenerated (has zero area)."""
         return self.double_areas == 0
     
     @cached_property
@@ -1502,10 +1684,13 @@ class Faces(Array):
         return normals
 
     @cached_property
-    def boundaries(self):
-        """`ndarray (n,)` : Whether each face has any boundary edges."""
-        edges = self._mesh.edges
-        return np.isin(self, edges[edges.boundaries]).any(axis=1)
+    def boundaries(self) -> np.ndarray:
+        """`ndarray (n,)` : Whether each face has any boundary edges or vertices."""
+        # edges = self._mesh.edges
+        # return np.isin(self, edges[edges.boundaries]).any(axis=1)
+
+        return np.array(self.adjacency.matrix.sum(axis=0) < 3).reshape(-1)
+
 
     @cached_property
     def edge_lengths_squared(self) -> np.ndarray:
@@ -1556,6 +1741,31 @@ class Faces(Array):
         return ~isclose(a, b) & ~isclose(b, c) & ~isclose(c, a)
     
     @cached_property
+    def centroids(self) -> Points:
+        """`Points (n, dim)` : Centroid of each face. Alias for `barycenters`."""
+        return Points(self.corners.mean(axis=1))
+    
+    @cached_property
+    def barycenters(self) -> Points:
+        """`Points (n, dim)` : Barycenter of each face. Alias for `centroids`."""
+        return self.centroids
+    
+    @cached_property
+    def circumcenters(self) -> Points:
+        """`Points (n, dim)` : Circumcenter of each face."""
+        raise NotImplementedError
+    
+    @cached_property
+    def incenters(self) -> Points:
+        """`Points (n, dim)` : Incenter of each face."""
+        raise NotImplementedError
+    
+    @cached_property
+    def orthocenters(self) -> Points:
+        """`Points (n, dim)` : Orthocenter of each face."""
+        raise NotImplementedError
+    
+    @cached_property
     def circumradii(self) -> np.ndarray:
         """`ndarray (n,)` : Radius of the circumcircle of each face."""
         a, b, c = self.edge_lengths.T
@@ -1572,7 +1782,7 @@ class Faces(Array):
             r = self.areas / (0.5 * (a + b + c))
         r[np.isnan(r)] = 0
         return r
-
+        
 
 # TODO: dire need of refactor
 class Edges(Array):
@@ -1635,7 +1845,7 @@ def convex_hull(
 ):
     """Compute the convex hull of a set of points or mesh."""
     mesh_type = TriangleMesh
-    if isinstance(obj, TriangleMesh):
+    if isinstance(obj, mesh_type):
         points = obj.vertices
         mesh_type = type(obj)  # if mesh is a subclass, return that type
     else:
@@ -1673,12 +1883,12 @@ def smooth_laplacian(
     mesh: TriangleMesh, 
     iterations: int = 1,
 ) -> TriangleMesh:
-    adjacency = mesh.vertices.adjacency_matrix
+    matrix = mesh.vertices.adjacency.matrix
     valences = mesh.vertices.valences.reshape(-1, 1)
     vertices = mesh.vertices.copy()
 
     for _ in range(iterations):
-        vertices = (adjacency @ vertices) / valences
+        vertices = (matrix @ vertices) / valences
 
     return type(mesh)(vertices, mesh.faces)    
 
@@ -1689,12 +1899,12 @@ def smooth_taubin(
     lamb: float = 0.5,
     mu: float = -0.53,
 ) -> TriangleMesh:
-    adjacency = mesh.vertices.adjacency_matrix
+    matrix = mesh.vertices.adjacency.matrix
     valences = mesh.vertices.valences.reshape(-1, 1)
     vertices = mesh.vertices.copy()
 
     for i in range(iterations):
-        delta = (adjacency @ vertices) / valences - vertices
+        delta = (matrix @ vertices) / valences - vertices
 
         if i % 2 == 0:
             vertices += lamb * delta

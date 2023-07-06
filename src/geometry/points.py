@@ -9,6 +9,7 @@ from scipy.spatial import cKDTree
 from .array import Array
 from .base import Geometry
 from .bounds import AABB
+from .sdf import SDF
 from .utils import unique_rows
 
 class Points(Array, Geometry):
@@ -69,18 +70,55 @@ class Points(Array, Geometry):
     def kdtree(self) -> cKDTree:
         return cKDTree(self)
     
+    @cached_property
+    def distance(self) -> SDF:
+        """Distance from each point to the nearest neighbor."""
+        def _distance(x, return_index=False, return_closest=False):
+            r = self.kdtree.query(x, workers=-1)
+            out = r[0]
+            # if return_index:
+            #     out = (out, r[1])
+            # if return_closest:
+            #     out = (out, self[r[1]])
+
+            if any([return_index, return_closest]):
+                out = [out]
+                if return_index:
+                    out.append(r[1])
+                if return_closest:
+                    out.append(self[r[1]])
+                out = tuple(out)
+            return out
+
+        return SDF(_distance, self.aabb)
+    
+    @cached_property
+    def signed_distance(self) -> SDF:
+        return self.distance
+    
+    @cached_property
+    def sdf(self) -> SDF:
+        return self.distance
+    
     def downsample(self, epsilon: float, method: Literal["poisson", "grid"] = "poisson") -> Points:
         """Downsample the point cloud using the specified method."""
         return {"poisson": downsample_poisson, "grid": downsample_grid}[method](self, epsilon)
 
-    def show(self):
+    def plot(self, name: str | None = None):
         import polyscope as ps
         ps.init()
         ps.set_up_dir("z_up")
         ps.set_ground_plane_mode("none")
-        points = ps.register_point_cloud("points", self)
+        points = ps.register_point_cloud(name or str(id(self)), self)
         points.add_color_quantity("colors", self.colors) if self.colors is not None else None
+        # ps.show()
+        return self
+    
+    def show(self, name: str | None = None):
+        self.plot(name)
+        import polyscope as ps
         ps.show()
+
 
 def downsample_poisson(points: Points, radius: float) -> Points:
     """Downsample a point cloud by removing neighbors within a given radius."""
@@ -89,7 +127,6 @@ def downsample_poisson(points: Points, radius: float) -> Points:
     tree = points.kdtree
     # mask of points to keep
     mask = np.ones(len(points), dtype=bool)
-    # doing this in a loop to avoid memory issues
     for i in range(len(points)):
         if not mask[i]: # already ruled out
             continue
@@ -99,8 +136,8 @@ def downsample_poisson(points: Points, radius: float) -> Points:
         mask[neighbors] = False
         # keep current point
         mask[i] = True
-    return points[mask]
 
+    return points[mask]
 
 def downsample_grid(points: Points, pitch: float) -> Points:
     """Downsample a point cloud by removing points that fall within a given grid pitch."""

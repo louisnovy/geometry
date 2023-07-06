@@ -52,24 +52,82 @@ class AABB(Geometry):
     @property
     def diagonal(self) -> float:
         return float(np.linalg.norm(self.extents))
+
+    def sample(self, n=1):
+        """Uniformly sample `n` points within the AABB.
+        
+        Parameters
+        ----------
+        n : `int`
+            The number of points to sample.
+
+        Returns
+        -------
+        `Points` (n, dim)
+            The sampled points.
+        """
+        # TODO: random seed handling
+        return points.Points(np.random.uniform(self.min, self.max, (n, self.dim)))
     
-    def sample(self, n_samples=1):
-        """Uniformly sample `n` points within the AABB."""
-        return points.Points(np.random.uniform(self.min, self.max, (n_samples, *self.min.shape)))
+    def sample_boundary(self, n=1, return_index=False):
+        """Uniformly sample `n` points on the boundary of the AABB.
+        
+        Parameters
+        ----------
+        n : `int`
+            The number of points to sample.
+        return_index : `bool`
+            Whether to return the index of the facet on which each point lies.
+
+        Returns
+        -------
+        `Points` (n, dim)
+            The sampled points.
+
+        `ndarray` (n,) (optional)
+            The index of the facet on which each point lies.
+        """
+        # TODO: random seed handling
+        facet_indices = np.random.randint(0, 2 * self.dim, n)
+
+        facet_points = np.random.uniform(0, 1, (n, self.dim))
+        facet_points[np.arange(n), facet_indices // 2] = facet_indices % 2
+
+        samples = points.Points(self.min + facet_points * self.extents)
+
+        if return_index:
+            return samples, facet_indices
+
+        return samples
 
     def contains(self, queries: ArrayLike):
-        """Array of booleans indicating whether each query point is contained within the AABB."""
-        queries = np.asanyarray(queries)
-        return np.all((queries >= self.min) & (queries <= self.max), axis=1)
-    
-    def check_intersection(self, other: AABB) -> bool:
+        """Compute whether each query point is contained within the AABB.
+        
+        Parameters
+        ----------
+        queries : `ArrayLike` (n_queries, dim)
+            The query points.
+
+        Returns
+        -------
+        `ndarray` (n_queries,)
+            Whether each query point is contained within the AABB.
+        """
+        queries = np.asarray(queries)
+        contained = np.ones(queries.shape[0], dtype=bool)
+        for i in range(self.dim):
+            contained &= (self.min[i] <= queries[:, i]) & (queries[:, i] <= self.max[i])
+        return contained
+
+    def detect_intersection(self, other: AABB) -> bool:
         """Check whether the AABB intersects another AABB."""
-        return np.all(self.min <= other.max) and np.all(self.max >= other.min)
+        return bool(np.all(self.min <= other.max) and np.all(self.max >= other.min))
     
     def offset(self, offset) -> AABB:
         return type(self)(self.min - offset, self.max + offset)
     
     def boolean(self, other: AABB, op: str) -> AABB:
+        return type(self)(np.minimum(self.min, other.min), np.maximum(self.max, other.max))
         if op == "union":
             return type(self)(np.minimum(self.min, other.min), np.maximum(self.max, other.max))
         elif op == "intersection":
@@ -90,7 +148,10 @@ class AABB(Geometry):
     
     def translate(self, vector: ArrayLike) -> AABB:
         return type(self)(self.min + vector, self.max + vector)
-
+    
+    def scale(self, factor: float | ArrayLike) -> AABB:
+        return type(self)(self.min * factor, self.max * factor)
+    
 
 class OBB:
     pass

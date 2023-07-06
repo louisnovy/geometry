@@ -1,6 +1,7 @@
 from __future__ import annotations
 import numpy as np
 from numpy.typing import ArrayLike
+from scipy.sparse import csr_array
 
 
 def lerp(a, b, x=0.5):
@@ -20,8 +21,8 @@ def smootherstep(a, b, x=0.5):
     return x * x * x * (x * (x * 6 - 15) + 10)
 
 
-def unique_rows(a: ArrayLike, **kwargs) -> np.ndarray:
-    """A significantly faster version of np.unique(array, axis=0, **kwargs). For 2D arrays.
+def unique_rows(a: ArrayLike, **kwargs) -> np.ndarray | tuple[np.ndarray, ...]:
+    """A significantly faster version of np.unique(array, axis=0, **kwargs).
     https://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array"""
 
     a = np.asarray(a)
@@ -70,3 +71,27 @@ def polygons_to_triangles(polygons) -> np.ndarray:
         return triangulate_slow(polygons)
 
     return triangulate_fast(polygons)
+
+
+class Adjacency:
+    def __init__(self, matrix: csr_array):
+        self.matrix = matrix
+
+    def __getitem__(self, index):
+        matrix = self.matrix
+
+        try:
+            return matrix.indices[matrix.indptr[index] : matrix.indptr[index + 1]]
+        except Exception as e:
+            if isinstance(index, slice):
+                return [
+                    matrix.indices[matrix.indptr[i] : matrix.indptr[i + 1]]
+                    for i in range(len(self))[index]
+                ]
+            raise e
+
+    def __iter__(self):
+        return (self[i] for i in range(len(self)))
+
+    def __len__(self):
+        return len(self.matrix.indptr) - 1

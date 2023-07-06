@@ -10,5 +10,5 @@ from .primitives import (
     uv_sphere,
     cylinder,
     cone,
-    torus,
+    torus
 )
