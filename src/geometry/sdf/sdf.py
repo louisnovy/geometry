@@ -313,7 +313,7 @@ def generate(
             nonempty += 1
             submeshes.append(result)
 
-    res = mesh.concatenate(submeshes)
+    res = mesh.concatenate(submeshes) if len(submeshes) > 0 else mesh.TriangleMesh()
     res = res.remove_duplicated_vertices(1e-8)
 
     if verbose:
