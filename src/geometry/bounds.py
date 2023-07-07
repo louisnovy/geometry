@@ -100,6 +100,7 @@ class AABB(Geometry):
 
         return samples
 
+    # TODO: this is suprisingly slow. write a c version to avoid all the intermediate arrays
     def contains(self, queries: ArrayLike):
         """Compute whether each query point is contained within the AABB.
         
@@ -113,15 +114,18 @@ class AABB(Geometry):
         `ndarray` (n_queries,)
             Whether each query point is contained within the AABB.
         """
-        queries = np.asarray(queries)
-        contained = np.ones(queries.shape[0], dtype=bool)
+        queries = np.asanyarray(queries)
+        contained = np.full(queries.shape[0], True)
         for i in range(self.dim):
             contained &= (self.min[i] <= queries[:, i]) & (queries[:, i] <= self.max[i])
         return contained
 
     def detect_intersection(self, other: AABB) -> bool:
         """Check whether the AABB intersects another AABB."""
-        return bool(np.all(self.min <= other.max) and np.all(self.max >= other.min))
+        for i in range(self.dim):
+            if self.max[i] < other.min[i] or self.min[i] > other.max[i]:
+                return False
+        return True
     
     def offset(self, offset) -> AABB:
         return type(self)(self.min - offset, self.max + offset)

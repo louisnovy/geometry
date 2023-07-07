@@ -43,6 +43,7 @@ class SDF:
 
         return f"<{type(self).__name__}({name}) {self.aabb}>"
     
+    # TODO: generalize dim
     @cached_property
     def bounds(self):
         if self.aabb.is_finite:
@@ -59,10 +60,10 @@ class SDF:
             Z = np.linspace(z0, z1, s)
             d = np.array([X[1] - X[0], Y[1] - Y[0], Z[1] - Z[0]])
             threshold = np.linalg.norm(d) / 2
-            # print(threshold)
+            print(threshold)
             # if prev is not None and threshold >= prev:
             if prev == threshold:
-                # print(i)
+                print(i)
                 break
             prev = threshold
             P = cartesian_product(X, Y, Z)
@@ -72,6 +73,32 @@ class SDF:
             x0, y0, z0 = (x0, y0, z0) + where.min(axis=0) * d - d / 2
 
         return _bounds.AABB((x0, y0, z0), (x1, y1, z1))
+
+
+        # s = 16
+        # n = 32
+        # B = _bounds.AABB(np.full(self.dim, -1e9), np.full(self.dim, 1e9))
+        # prev = None
+        # for i in range(n):
+        #     grids = []
+        #     for j in range(self.dim):
+        #         grid = np.linspace(B.min[j], B.max[j], s)
+        #         grids.append(grid)
+        #     P = np.stack(np.meshgrid(*grids, indexing="ij"), axis=-1).reshape(-1, self.dim)
+        #     d = np.array([grids[0][1] - grids[0][0]] * self.dim)
+        #     threshold = np.linalg.norm(d) / 2
+        #     volume = self(P).reshape(tuple(len(g) for g in grids))
+        #     where = np.argwhere(np.abs(volume) <= threshold)
+        #     B = _bounds.AABB(
+        #         (B.min + where.min(axis=0) * d - d / 2),
+        #         (B.min + where.max(axis=0) * d + d / 2)
+        #     )
+        #     if prev == threshold:
+        #         break
+        #     prev = threshold
+
+        # return B
+
     
     def contains(self, queries: ArrayLike) -> np.ndarray:
         return self(queries) <= 0
@@ -262,7 +289,7 @@ def generate(
 
     if verbose:
         print(
-            f"bounds: {bounds}",
+            f"bounds: {bounds}\n",
             f"step: {step}"
         )
 

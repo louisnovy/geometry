@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Literal, Type, Optional, Generator
+from typing import Literal, Type, Optional, overload
 from numpy.typing import ArrayLike
 from functools import cached_property, partial
 
@@ -115,7 +115,12 @@ class TriangleMesh(Geometry):
     
     @cached_property
     def n_components(self) -> int:
-        """`int` : Number of face-connected components in the mesh."""
+        """`int` : Number of vertex-connected components in the mesh."""
+        return csgraph.connected_components(self.vertices.adjacency.matrix, directed=False, return_labels=False)
+    
+    @cached_property
+    def n_surface_components(self) -> int:
+        """`int` : Number of surface-connected components in the mesh."""
         return csgraph.connected_components(self.faces.adjacency.matrix, directed=False, return_labels=False)
     
     @property
@@ -808,57 +813,6 @@ class TriangleMesh(Geometry):
     
     # *** Remeshing ***
 
-    def resolve_self_intersections(self, stitch=True) -> TriangleMesh:
-        """Resolve self-intersections by creating new edges where faces intersect and
-        (by default) stitching together overlapping components.
-
-        Parameters
-        ----------
-        stitch : `bool`, optional (default: True)
-            Stitch together overlapping components into connected components by merging vertices at the overlap.
-            If False, preserves the original mesh topology (output will have duplicated vertices where original faces intersect).
-
-        Returns
-        -------
-        `TriangleMesh`
-            Mesh with self-intersections resolved.
-        """
-        resolved_vertices, resolved_faces, _, _, _ = bindings.remesh_self_intersections(
-            self.vertices,
-            self.faces,
-            stitch_all=stitch,
-        )
-
-        return type(self)(resolved_vertices, resolved_faces)
-
-    # def resolve_self_intersections(self, face_indices: ArrayLike | None = None, stitch=True) -> TriangleMesh:
-    #     """Resolve self-intersections by creating new edges where faces intersect and
-    #     (by default) stitching together overlapping components.
-
-    #     Parameters
-    #     ----------
-    #     face_indices : `ArrayLike`, optional (default: None)
-    #         Specify faces to resolve self-intersections for. If None, all faces are considered.
-    #     stitch : `bool`, optional (default: True)
-    #         Stitch together overlapping components into connected components by merging vertices at the overlap.
-    #         If False, preserves the original mesh topology (output will have duplicated vertices where original faces intersect).
-
-    #     Returns
-    #     -------
-    #     `TriangleMesh`
-    #         Mesh with self-intersections resolved.
-    #     """
-    #     resolve = lambda v, f: bindings.remesh_self_intersections(
-    #         v,
-    #         f,
-    #         stitch_all=stitch,
-    #     )
-
-    #     if face_indices is None:
-    #         return type(self)(*resolve(self.vertices, self.faces)[0:2])
-    #     else:
-
-
     def collapse_short_edges(self, length: float | None = None) -> TriangleMesh:
         """Collapse edges shorter than 'length'.
 
@@ -1033,11 +987,17 @@ class TriangleMesh(Geometry):
             Unstitched mesh.
         """
         corners = self.faces.corners
-        vertices = corners.reshape(-1, corners.shape[-1])
-        faces = np.arange(len(vertices)).reshape(-1, 3)
+        v_per_face = corners.shape[-1]
+        vertices = corners.reshape(-1, v_per_face)
+        faces = np.arange(self.n_vertices).reshape(-1, v_per_face)
         return type(self)(vertices, faces)
     
-    def detect_intersection(self, other: TriangleMesh, return_index: bool = False) -> tuple[bool, np.ndarray] | bool:
+    # TODO: figure out typing overloads...
+    def detect_intersection(
+        self,
+        other: TriangleMesh,
+        return_index: bool = False
+    ) -> bool | tuple[bool, np.ndarray]:
         """Detect intersection with another mesh. Self-intersections are ignored.
 
         Parameters
@@ -1085,132 +1045,124 @@ class TriangleMesh(Geometry):
             return is_intersecting, indices
 
         return is_intersecting
+    
+    def resolve_self_intersections(
+        self,
+        stitch=True,
+        return_sources=False
+    ) -> TriangleMesh | tuple[TriangleMesh, np.ndarray]:
+        """Resolve self-intersections by creating new edges where faces intersect.
+
+        Parameters
+        ----------
+        stitch : `bool`, optional (default: True)
+            Stitch together overlapping components into connected components by merging vertices at the overlap.
+            If False, preserves the original mesh topology (output will have duplicated vertices where original faces intersect).
+        return_sources : `bool`, optional (default: False)
+            If True, return mapping from new faces to original faces.
+            
+        Returns
+        -------
+        `TriangleMesh`
+            Mesh with self-intersections resolved.
+        `ndarray` (optional)
+            Array of face indices into the original mesh indicating which faces each new face was created from.
+        """
+        resolved_vertices, resolved_faces, _, birth_faces, _ = bindings.remesh_self_intersections(
+            self.vertices,
+            self.faces,
+            stitch_all=stitch,
+        )
+
+        r = type(self)(resolved_vertices, resolved_faces)
+        
+        if return_sources:
+            return r, birth_faces
+        
+        return r
 
     # TODO: generalize to allow multiple inputs and passing in a
     # modified function for winding number operations. this should allow
     # for useful things like multi intersection at a certain "depth"
-    def boolean(
+    def intersection(
         self,
         other: TriangleMesh,
-        operation: Literal["union", "intersection", "difference"],
-        clip: bool = False,
+        crop: bool = False,
         cull: bool = False,
         threshold: float | None = None,
         exact: bool = False,
+        # resolve_all: bool = False,
     ):  
-        if operation == "union":
-            if other.is_empty:
-                return type(self)(self.vertices, self.faces)
-        elif operation == "intersection":
-            if other.is_empty:
-                return type(self)()
-        elif operation == "difference":
-            if other.is_empty:
-                return type(self)(self.vertices, self.faces)
-            other = ~other
-        else:
-            raise ValueError(f"Unsupported operation: {operation}")
-
-        if cull:
-            A = self
-            B = other
-        else:
-            # only resolve intersecting faces between meshes instead of all self-intersections
-            _, intersecting_face_pairs = self.detect_intersection(other, return_index=True)
-            
-            a_intersections = np.in1d(np.arange(self.n_faces), intersecting_face_pairs[:, 0])
-            b_intersections = np.in1d(np.arange(other.n_faces), intersecting_face_pairs[:, 1])
-
-            a = self.submesh(a_intersections)
-            b = other.submesh(b_intersections)
-            intersecting = a + b
-
-            vertices, faces, _, birth_faces, _ = bindings.remesh_self_intersections(
-                intersecting.vertices,
-                intersecting.faces,
-                stitch_all=True,
-            )
-            
-            resolved = type(self)(vertices, faces)
-            from_a = birth_faces < a.n_faces
-
-            A = resolved.submesh(from_a) + self.submesh(~a_intersections)
-            B = resolved.submesh(~from_a) + other.submesh(~b_intersections)
-        
-        # a, b = A, B.dilate(0.001 * np.sign(B.volume))
-        a, b = A, B
-
-        def select_faces(a: TriangleMesh, b: TriangleMesh, jog=False):
-            if cull:
-                all_corners = a.faces.corners.reshape(-1, 3)
-                inside_corners = b.contains(all_corners, threshold=threshold, exact=exact)
-                selection = np.any(inside_corners.reshape(-1, 3), axis=1)
-            else:
-                selection = b.contains(a.faces.centroids, threshold=threshold, exact=exact)
-
-            if operation == "union":
-                return ~selection
-            
-            return selection
-
-        
-        res = A.submesh(select_faces(a, b))
-
-        if not clip:
-            res += B.submesh(select_faces(b, a))
-        
-        return res.remove_duplicated_vertices()
-    
-    
-    def union(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
-        """Compute the union of two meshes.
+        """Create a mesh enclosing the logical intersection of the volume represented by this mesh and another mesh.
 
         Parameters
         ----------
         other : `TriangleMesh`
             Other mesh.
-
-        Returns
-        -------
-        `TriangleMesh`
-            Union of the two meshes.
-        """
-        return self.boolean(other, "union", clip=clip, cull=cull)
-    
-    def intersection(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
-        """Compute the intersection of two meshes.
-
-        Parameters
-        ----------
-        other : `TriangleMesh`
-            Other mesh.
+        crop : `bool`, optional (default: False)
+            Crop the original mesh with the volume of the intersection by only keeping faces from the original mesh.
+        cull : `bool`, optional (default: False)
+            Don't bother resolving intersections and make a good guess from the original faces.
+        threshold : `float`, optional (default: None)
+            Winding number threshold for determining if a point is inside or outside the mesh.
+        exact : `bool`, optional (default: False)
+            If True, use exact winding number computation. If False, use fast approximation.
+        resolve_all : `bool`, optional (default: False)
+            If True, resolve all self-intersections.
 
         Returns
         -------
         `TriangleMesh`
             Intersection of the two meshes.
         """
-        return self.boolean(other, "intersection", clip=clip, cull=cull)
-    
-    def difference(self, other: TriangleMesh, clip=False, cull=False) -> TriangleMesh:
-        """Compute the difference of two meshes.
 
-        Parameters
-        ----------
-        other : `TriangleMesh`
-            Other mesh.
+        A = self
+        B = other
 
-        Returns
-        -------
-        `TriangleMesh`
-            Difference of the two meshes.
-        """
-        return self.boolean(other, "difference", clip=clip, cull=cull)
+        if not cull:
+            is_intersecting, intersecting_face_pairs = self.detect_intersection(other, return_index=True) # type: ignore
+
+            if is_intersecting:            
+                a_intersections = np.in1d(np.arange(self.n_faces), intersecting_face_pairs[:, 0])
+                b_intersections = np.in1d(np.arange(other.n_faces), intersecting_face_pairs[:, 1])
+
+                a = self.submesh(a_intersections)
+                b = other.submesh(b_intersections)
+
+                resolved, birth_faces = (a + b).resolve_self_intersections(return_sources=True) # type: ignore
+                from_a = birth_faces < a.n_faces
+
+                A = resolved.submesh(from_a) + self.submesh(~a_intersections)
+                B = resolved.submesh(~from_a) + other.submesh(~b_intersections)
+        
+        def select_faces(a: TriangleMesh, b: TriangleMesh, jog=False):
+            if cull:
+                all_corners = a.faces.corners.reshape(-1, 3)
+                inside_corners = b.contains(all_corners, threshold=threshold, exact=exact)
+                return np.any(inside_corners.reshape(-1, 3), axis=1)
+            
+            return b.contains(a.faces.centroids, threshold=threshold, exact=exact)
+
+        
+        res = A.submesh(select_faces(A, B))
+
+        if not crop:
+            res += B.submesh(select_faces(B, A))
+        
+        return res.remove_duplicated_vertices()
     
-    def crop(self, other: TriangleMesh, cull: bool = False, invert: bool = False) -> TriangleMesh:
-        """Crop by removing the part of self that is outside the other mesh. 
-        This is equivalent to computing boolean intersection (invert=False) or difference (invert=True)
-        with clip=True.
+    
+    def difference(self, other: TriangleMesh, crop=False, cull=False, threshold=None, exact=False):
+        return self.intersection(other.invert(), crop=crop, cull=cull, threshold=threshold, exact=exact)
+    
+
+    def union(self, other: TriangleMesh, crop=False, cull=False, threshold=None, exact=False):
+        return self.invert().intersection(other.invert(), crop=crop, cull=cull, threshold=threshold, exact=exact).invert()
+
+    
+    def crop(self, other: TriangleMesh, cull=False, threshold=None, exact=False):
+        """Crop by removing the part of self that is outside the other mesh.
+        This is equivalent to intersection with crop=True.
 
         Parameters
         ----------
@@ -1218,16 +1170,13 @@ class TriangleMesh(Geometry):
             Other mesh.
         cull : `bool`, optional (default: False)
             If True, remove faces by simply culling them instead of resolving intersections.
-        invert : `bool`, optional (default: False)
-            If True, invert the crop by removing all faces that are inside the other mesh instead.
+
 
         Returns
         -------
         `TriangleMesh`
             Cropped mesh.
         """
-        operation = "intersection" if not invert else "difference"
-        return self.boolean(other, operation, cull=cull, clip=True)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
