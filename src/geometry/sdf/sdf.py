@@ -17,8 +17,11 @@ from .. import mesh, tensor, bounds as _bounds  # TODO: did not forsee this conf
 # TODO: bounds calculations are just approximations for many ops here. things like offset
 # and smooth will not be accurate. for booleans we should probably actually boolean some boxes or something
 
+
 class SDF:
-    def __init__(self, sdf: Callable, bounds=((-np.inf, -np.inf, -np.inf), (np.inf, np.inf, np.inf))):
+    def __init__(
+        self, sdf: Callable, bounds=((-np.inf, -np.inf, -np.inf), (np.inf, np.inf, np.inf))
+    ):
         self.func = sdf
         self.aabb = _bounds.AABB(bounds)
 
@@ -33,7 +36,7 @@ class SDF:
                 f"increasing recursion limit from {limit} to {target}"
             )
             sys.setrecursionlimit(target)
-            return self.func(queries, **kwargs)
+            return self.func(np.asanyarray(queries), **kwargs)
 
     def __repr__(self) -> str:
         try:
@@ -42,64 +45,13 @@ class SDF:
             name = type(self.func).__name__
 
         return f"<{type(self).__name__}({name}) {self.aabb}>"
-    
-    # TODO: generalize dim
+
     @cached_property
     def bounds(self):
         if self.aabb.is_finite:
             return self.aabb
+        return estimate_bounds(self)
 
-        s = 16
-        n = 32
-        x0 = y0 = z0 = -1e9
-        x1 = y1 = z1 = 1e9
-        prev = None
-        for i in range(n):
-            X = np.linspace(x0, x1, s)
-            Y = np.linspace(y0, y1, s)
-            Z = np.linspace(z0, z1, s)
-            d = np.array([X[1] - X[0], Y[1] - Y[0], Z[1] - Z[0]])
-            threshold = np.linalg.norm(d) / 2
-            print(threshold)
-            # if prev is not None and threshold >= prev:
-            if prev == threshold:
-                print(i)
-                break
-            prev = threshold
-            P = cartesian_product(X, Y, Z)
-            volume = self(P).reshape((len(X), len(Y), len(Z)))
-            where = np.argwhere(np.abs(volume) <= threshold)
-            x1, y1, z1 = (x0, y0, z0) + where.max(axis=0) * d + d / 2
-            x0, y0, z0 = (x0, y0, z0) + where.min(axis=0) * d - d / 2
-
-        return _bounds.AABB((x0, y0, z0), (x1, y1, z1))
-
-
-        # s = 16
-        # n = 32
-        # B = _bounds.AABB(np.full(self.dim, -1e9), np.full(self.dim, 1e9))
-        # prev = None
-        # for i in range(n):
-        #     grids = []
-        #     for j in range(self.dim):
-        #         grid = np.linspace(B.min[j], B.max[j], s)
-        #         grids.append(grid)
-        #     P = np.stack(np.meshgrid(*grids, indexing="ij"), axis=-1).reshape(-1, self.dim)
-        #     d = np.array([grids[0][1] - grids[0][0]] * self.dim)
-        #     threshold = np.linalg.norm(d) / 2
-        #     volume = self(P).reshape(tuple(len(g) for g in grids))
-        #     where = np.argwhere(np.abs(volume) <= threshold)
-        #     B = _bounds.AABB(
-        #         (B.min + where.min(axis=0) * d - d / 2),
-        #         (B.min + where.max(axis=0) * d + d / 2)
-        #     )
-        #     if prev == threshold:
-        #         break
-        #     prev = threshold
-
-        # return B
-
-    
     def contains(self, queries: ArrayLike) -> np.ndarray:
         return self(queries) <= 0
 
@@ -127,25 +79,23 @@ class SDF:
         grid = np.stack(np.meshgrid(*grid, indexing="ij"), axis=-1).reshape(-1, self.dim)
 
         return tensor.SDT(self(grid).reshape(*shape), voxsize, bounds)
-    
+
     def translate(self, vector: ArrayLike) -> SDF:
         vector = np.asarray(vector)
+
         def f(p):
-            p = np.asarray(p)
             return self(p - vector)
 
         return type(self)(f, self.aabb.translate(vector))
-    
+
     def scale(self, factor: float | ArrayLike) -> SDF:
         def f(p):
-            p = np.asarray(p)
             return self(p / factor) * factor
 
         return type(self)(f, self.aabb.scale(factor))
 
     def offset(self, offset: float) -> SDF:
         def f(p):
-            p = np.asarray(p)
             return self(p) - offset
 
         return type(self)(f, self.aabb.offset(offset) if offset >= 0 else self.aabb)
@@ -155,130 +105,151 @@ class SDF:
             return -self(p)
 
         return type(self)(f)
-    
+
     def shell(self, thickness: float) -> SDF:
         def f(p):
             return np.abs(self(p)) - thickness / 2
-        
+
         return type(self)(f)
-    
+
     def twist(self, k):
         def f(p):
-            p = np.asarray(p)
-            x = p[:,0]
-            y = p[:,1]
-            z = p[:,2]
+            x = p[:, 0]
+            y = p[:, 1]
+            z = p[:, 2]
             c = np.cos(k * z)
             s = np.sin(k * z)
             x2 = c * x - s * y
             y2 = s * x + c * y
             z2 = z
             return self(np.stack([x2, y2, z2], axis=-1))
-        return type(self)(f)
-    
-    def bend(self, k):
-        def f(p):
-            p = np.asarray(p)
-            x = p[:,0]
-            y = p[:,1]
-            z = p[:,2]
-            c = np.cos(k * x)
-            s = np.sin(k * x)
-            x2 = c * x - s * y
-            y2 = s * x + c * y
-            z2 = z
-            return self(np.stack([x2, y2, z2], axis=-1))
+
         return type(self)(f)
 
-    def boolean(self, other, op: str, k=None):
-        return boolean(self, other, op, k=k)
+    def intersection(self, other: SDF, k=None):
+        def f(p):
+            if k is None:
+                return np.maximum(self(p), other(p))
+
+            a = self(p)
+            b = other(p)
+            h = np.clip(0.5 - 0.5 * (b - a) / k, 0, 1)
+            m = b + (a - b) * h
+            return m + k * h * (1 - h)
+
+        return type(self)(f)
+
+    def difference(self, other: SDF, k=None):
+        return self.intersection(other.invert(), k=k)
 
     def union(self, other, k=None):
-        return boolean(self, other, "union", k=k)
+        return self.invert().intersection(other.invert(), k=k).invert()
 
-    def difference(self, other, k=None):
-        return boolean(self, other, "difference", k=k)
+    def symmetric_difference(self, other, k=None):
+        return self.union(other, k=k).difference(self.intersection(other, k=k), k=k)
 
-    def intersection(self, other, k=None):
-        return boolean(self, other, "intersection", k=k)
-    
-    def __or__(self, other):
-        return self.union(other)
-    
     def __and__(self, other):
         return self.intersection(other)
-    
+
+    def __or__(self, other):
+        return self.union(other)
+
     def __invert__(self):
         return self.invert()
-    
 
-SAMPLES = 2 ** 22
+
+SAMPLES = 2**22
 BATCH_SIZE = 32
 
 
-def cartesian_product(*arrays):
-    grid = np.meshgrid(*arrays, indexing="ij")
-    return np.stack(grid, axis=-1).reshape(-1, len(arrays))
+# def cartesian_product(*arrays):
+#     grid = np.meshgrid(*arrays, indexing="ij")
+#     return np.stack(grid, axis=-1).reshape(-1, len(arrays))
+
+
+def estimate_bounds(sdf: SDF):
+    s = 16
+    n = 32
+    x0 = y0 = z0 = -1e9
+    x1 = y1 = z1 = 1e9
+    prev = None
+    for i in range(n):
+        X = np.linspace(x0, x1, s)
+        Y = np.linspace(y0, y1, s)
+        Z = np.linspace(z0, z1, s)
+        d = np.array([X[1] - X[0], Y[1] - Y[0], Z[1] - Z[0]])
+        threshold = np.linalg.norm(d) / 2
+        if prev == threshold:
+            # print(i)
+            break
+        prev = threshold
+        P = list(itertools.product(X, Y, Z))
+        volume = sdf(P).reshape((len(X), len(Y), len(Z)))
+        where = np.argwhere(np.abs(volume) <= threshold)
+        x1, y1, z1 = (x0, y0, z0) + where.max(axis=0) * d + d / 2
+        x0, y0, z0 = (x0, y0, z0) + where.min(axis=0) * d - d / 2
+
+    return _bounds.AABB((x0, y0, z0), (x1, y1, z1))
 
 
 def skip_this_job(sdf: SDF, job):
-    X, Y, Z = job
-    x0, x1 = X[0], X[-1]
-    y0, y1 = Y[0], Y[-1]
-    z0, z1 = Z[0], Z[-1]
-    x = (x0 + x1) / 2
-    y = (y0 + y1) / 2
-    z = (z0 + z1) / 2
-    center = (x, y, z)
-    radius = sdf([center])[0]
-    d = np.linalg.norm((x-x0, y-y0, z-z0))
-    if radius <= d:
+    endpoints = [x[[0, -1]] for x in job]
+
+    center = np.mean(endpoints, axis=1)
+    r = abs(sdf([center])[0])
+    d = np.linalg.norm(np.diff(endpoints, axis=1)) / 2
+    if r <= d:
         return False
-    corners = list(itertools.product((x0, x1), (y0, y1), (z0, z1)))
+
+    corners = list(itertools.product(*endpoints))
     contained = sdf.contains(corners)
-    if np.any(contained):
-        return np.all(contained)
-    return True
+    # all must be inside or outside
+    return np.all(contained == contained[0])
+
 
 def _triangulate(sdf, job, sparse=True):
-    X, Y, Z = job
     if sparse and skip_this_job(sdf, job):
         return None
 
-    P = cartesian_product(X, Y, Z)
+    X, Y, Z = job
+    P = list(itertools.product(X, Y, Z))
     volume = sdf(P).reshape((len(X), len(Y), len(Z)))
 
     try:
         vertices, faces, _, _ = measure.marching_cubes(
             volume,
             level=0,
-            gradient_direction="descent",
             allow_degenerate=False,
         )
     except Exception as e:
         if e.args[0] == "Surface level must be within volume data range.":
             return mesh.TriangleMesh()
         raise e
-        
+
     scale = np.array([X[1] - X[0], Y[1] - Y[0], Z[1] - Z[0]])
     offset = np.array([X[0], Y[0], Z[0]])
-    return mesh.TriangleMesh(vertices * scale + offset, faces)
+    r = mesh.TriangleMesh(vertices * scale + offset, faces)
+    # r.plot(properties=False)
+    return r
+
 
 def generate(
-        sdf: SDF,
-        step=None,
-        bounds=None,
-        samples=SAMPLES,
-        batch_size=BATCH_SIZE,
-        verbose=False,
-        sparse=True,
-    ):
+    sdf: SDF,
+    step=None,
+    bounds=None,
+    samples=SAMPLES,
+    batch_size=BATCH_SIZE,
+    verbose=False,
+    sparse=True,
+):
     start = time.time()
 
     if bounds is None:
         bounds = sdf.bounds
-        assert bounds.is_finite
-
+    else:
+        bounds = _bounds.AABB(bounds)
+        if not bounds.is_finite:
+            raise ValueError("Meshing requires finite bounds")
 
     if step is None and samples is not None:
         volume = np.prod(bounds.extents)
@@ -288,10 +259,7 @@ def generate(
     bounds = bounds.offset(np.max(step))
 
     if verbose:
-        print(
-            f"bounds: {bounds}\n",
-            f"step: {step}"
-        )
+        print(f"bounds: {bounds}\n", f"step: {step}")
 
     try:
         dx, dy, dz = step
@@ -306,12 +274,11 @@ def generate(
     Y = np.arange(y0, y1, dy)
     Z = np.arange(z0, z1, dz)
 
-    Xs = [X[i:i+s+1] for i in range(0, len(X), s)]
-    Ys = [Y[i:i+s+1] for i in range(0, len(Y), s)]
-    Zs = [Z[i:i+s+1] for i in range(0, len(Z), s)]
+    Xs = [X[i : i + s + 1] for i in range(0, len(X), s)]
+    Ys = [Y[i : i + s + 1] for i in range(0, len(Y), s)]
+    Zs = [Z[i : i + s + 1] for i in range(0, len(Z), s)]
 
     skipped = empty = nonempty = 0
-    # batches = list(itertools.product(Xs, Ys, Zs))
     batches = []
     for X, Y, Z in itertools.product(Xs, Ys, Zs):
         if len(X) > 1 and len(Y) > 1 and len(Z) > 1:
@@ -320,10 +287,9 @@ def generate(
             # print(f"skipping {X, Y, Z}")
             skipped += 1
 
-    num_batches = len(batches)
-    num_samples = sum(len(xs) * len(ys) * len(zs) for xs, ys, zs in batches)
-    
     if verbose:
+        num_batches = len(batches)
+        num_samples = sum(len(xs) * len(ys) * len(zs) for xs, ys, zs in batches)
         print(
             f"{num_samples} samples in {num_batches} batches with "
             f"({int(num_samples // num_batches):.1f} samples per batch)"
@@ -365,42 +331,9 @@ def generate(
         print(f"intersecting    {res.is_self_intersecting}")
         print(f"degen faces     {res.faces.degenerated.sum()}")
 
+        assert res.is_watertight
+
     return res
-
-
-def boolean(a: SDF, b: SDF, op: str, k=None) -> SDF:
-    bounds = a.aabb.boolean(b.aabb, op)
-
-    def f(p):
-        d1 = a(p)
-        d2 = b(p)
-
-        if k:
-            if op == "union":
-                h = np.clip(0.5 + 0.5 * (d2 - d1) / k, 0, 1)
-                m = d2 + (d1 - d2) * h
-                return m - k * h * (1 - h)
-            elif op == "difference":
-                h = np.clip(0.5 - 0.5 * (d2 + d1) / k, 0, 1)
-                m = d1 + (-d2 - d1) * h
-                return m + k * h * (1 - h)
-            elif op == "intersection":
-                h = np.clip(0.5 - 0.5 * (d2 - d1) / k, 0, 1)
-                m = d2 + (d1 - d2) * h
-                return m + k * h * (1 - h)
-            else:
-                raise ValueError(f"invalid op: {op}")
-
-        if op == "union":
-            return np.minimum(d1, d2)
-        elif op == "difference":
-            return np.maximum(d1, -d2)
-        elif op == "intersection":
-            return np.maximum(d1, d2)
-        else:
-            raise ValueError(f"invalid op: {op}")
-
-    return SDF(f, bounds)
 
 
 def sphere(r=1):
@@ -409,15 +342,6 @@ def sphere(r=1):
 
     return SDF(f, _bounds.AABB((-r, -r, -r), (r, r, r)))
 
-
-def cube(size: float, center: np.ndarray | None = None) -> SDF:
-    center = np.zeros(3) if center is None else np.asarray(center)
-    half = size / 2
-
-    def f(p):
-        return np.max(np.abs(p - center) - half, axis=-1)
-
-    return SDF(f, _bounds.AABB((center - half, center + half)))
 
 def box(a: ArrayLike = (-1, -1, -1), b: ArrayLike = (1, 1, 1)) -> SDF:
     a = np.asarray(a)
