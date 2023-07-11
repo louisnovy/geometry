@@ -1227,13 +1227,13 @@ class TriangleMesh(Geometry):
             if not np.any(coplanar):
                 return sdists < 0
             
-            print(f"{np.sum(coplanar)} coplanar faces detected.")
+            # print(f"{np.sum(coplanar)} coplanar faces detected.")
 
             coplanar_test_points = test_points[coplanar]
             inside[~coplanar] = sdists[~coplanar] < 0
             coplanar_test_points -= a.submesh(coplanar).faces.normals * 1e-4
-
             inside[coplanar] = b.contains(coplanar_test_points, threshold=threshold, exact=exact)
+
             return inside
 
         res = A.submesh(faces_inside(A, other))
@@ -1247,13 +1247,13 @@ class TriangleMesh(Geometry):
         res = res.remove_duplicated_faces()
         return res
     
-    def difference(self, other: TriangleMesh, crop=False, resolve=False, threshold=None, exact=False):
+    def difference(self, other: TriangleMesh, crop=False, resolve=True, threshold=None, exact=False):
         return self.intersection(other.invert(), crop=crop, resolve=resolve, threshold=threshold, exact=exact)
 
-    def union(self, other: TriangleMesh, crop=False, resolve=False, threshold=None, exact=False):
+    def union(self, other: TriangleMesh, crop=False, resolve=True, threshold=None, exact=False):
         return self.invert().intersection(other.invert(), crop=crop, resolve=resolve, threshold=threshold, exact=exact).invert()
     
-    def crop(self, other: TriangleMesh, resolve=False, threshold=None, exact=False):
+    def crop(self, other: TriangleMesh, resolve=True, threshold=None, exact=False):
         """Crop by removing the part of self that is outside the other mesh.
         This is equivalent to intersection with crop=True.
 
