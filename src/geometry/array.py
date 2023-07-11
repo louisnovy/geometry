@@ -32,8 +32,8 @@ class Array(np.ndarray):
 
     def __new__(cls, *args, **kwargs):
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
-        self = np.array(*args, **kwargs).view(cls)
-        # self = np.asarray(*args, **kwargs).view(cls)
+        self = np.ascontiguousarray(*args, **kwargs).view(cls)
+        # self = np.array(*args, **kwargs).view(cls)
         # if not mutable:
         #     self.flags.writeable = False
         return self
@@ -58,12 +58,12 @@ class Array(np.ndarray):
         try:
             self._hash = xxh3_64_intdigest(self.data)
             return self._hash
-        except ValueError:  # xxhash requires contiguous memory
+        except BufferError:  # xxhash requires contiguous memory
             self._hash = xxh3_64_intdigest(self.copy(order="C").data)
             return self._hash
 
     # helper that will make a new version of a method that invalidates hash
-    def invalidate(method: str) -> Callable:
+    def invalidate(method: str) -> Callable: # type: ignore
         def f(self: Array, *args, **kwargs):
             if hasattr(self, "_hash"):
                 del self._hash

@@ -76,9 +76,7 @@ class SDF:
             shape += (size,)
             grid.append(np.linspace(bounds.min[i], bounds.max[i], size))
 
-        grid = np.stack(np.meshgrid(*grid, indexing="ij"), axis=-1).reshape(-1, self.dim)
-
-        return tensor.SDT(self(grid).reshape(*shape), voxsize, bounds)
+        return tensor.SDT(self(cartesian_product(*grid)).reshape(*shape), voxsize, bounds)
 
     def translate(self, vector: ArrayLike) -> SDF:
         vector = np.asarray(vector)
@@ -162,9 +160,9 @@ SAMPLES = 2**22
 BATCH_SIZE = 32
 
 
-# def cartesian_product(*arrays):
-#     grid = np.meshgrid(*arrays, indexing="ij")
-#     return np.stack(grid, axis=-1).reshape(-1, len(arrays))
+def cartesian_product(*arrays):
+    grid = np.meshgrid(*arrays, indexing="ij")
+    return np.stack(grid, axis=-1).reshape(-1, len(arrays))
 
 
 def estimate_bounds(sdf: SDF):
@@ -212,14 +210,14 @@ def _triangulate(sdf, job, sparse=True):
         return None
 
     X, Y, Z = job
-    P = list(itertools.product(X, Y, Z))
+    P = cartesian_product(X, Y, Z)
     volume = sdf(P).reshape((len(X), len(Y), len(Z)))
 
     try:
         vertices, faces, _, _ = measure.marching_cubes(
             volume,
             level=0,
-            allow_degenerate=False,
+            # allow_degenerate=False,
         )
     except Exception as e:
         if e.args[0] == "Surface level must be within volume data range.":
@@ -256,15 +254,11 @@ def generate(
         step = (volume / samples) ** (1 / 3)
 
     step = np.broadcast_to(np.array(step), 3).astype(float)
-    bounds = bounds.offset(np.max(step))
+    dx, dy, dz = step
 
     if verbose:
         print(f"bounds: {bounds}\n", f"step: {step}")
-
-    try:
-        dx, dy, dz = step
-    except TypeError:
-        dx = dy = dz = step
+    bounds = bounds.offset(np.max(step))
 
     (x0, y0, z0), (x1, y1, z1) = bounds
 

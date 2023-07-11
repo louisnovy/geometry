@@ -76,10 +76,6 @@ class Points(Array, Geometry):
         def _distance(x, return_index=False, return_closest=False):
             r = self.kdtree.query(x, workers=-1)
             out = r[0]
-            # if return_index:
-            #     out = (out, r[1])
-            # if return_closest:
-            #     out = (out, self[r[1]])
 
             if any([return_index, return_closest]):
                 out = [out]

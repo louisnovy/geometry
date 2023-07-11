@@ -208,7 +208,8 @@ void bindings(py::module &m) {
   m.def("intersect_other",
         [](EigenDRef<MatrixXd> verticesA_in, EigenDRef<MatrixXi> facesA_in,
            EigenDRef<MatrixXd> verticesB_in, EigenDRef<MatrixXi> facesB_in,
-           bool detect_only = false, bool first_only = false) {
+           bool detect_only = false, bool first_only = false,
+           bool slow_and_more_precise_rounding = false) {
           Eigen::MatrixXd verticesA(verticesA_in);
           Eigen::MatrixXi facesA(facesA_in);
           Eigen::MatrixXd verticesB(verticesB_in);
@@ -216,6 +217,7 @@ void bindings(py::module &m) {
           igl::copyleft::cgal::RemeshSelfIntersectionsParam params;
           params.detect_only = detect_only;
           params.first_only = first_only;
+          params.slow_and_more_precise_rounding = slow_and_more_precise_rounding;
           Eigen::MatrixXi intersecting_face_pairs;
           Eigen::MatrixXd vertices_out;
           Eigen::MatrixXi faces_out;
@@ -234,7 +236,8 @@ void bindings(py::module &m) {
   py::arg("verticesB"),
   py::arg("facesB"),
   py::arg("detect_only") = false,
-  py::arg("first_only") = false);
+  py::arg("first_only") = false,
+  py::arg("slow_and_more_precise_rounding") = false);
 
   m.def("remesh_self_intersections", [](EigenDRef<MatrixXd> vertices_in,
                                         EigenDRef<MatrixXi> faces_in,

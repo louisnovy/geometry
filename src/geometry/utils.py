@@ -83,12 +83,7 @@ class Adjacency:
         try:
             return matrix.indices[matrix.indptr[index] : matrix.indptr[index + 1]]
         except Exception as e:
-            if isinstance(index, slice):
-                return [
-                    matrix.indices[matrix.indptr[i] : matrix.indptr[i + 1]]
-                    for i in range(len(self))[index]
-                ]
-            raise e
+            return [matrix.indices[matrix.indptr[i] : matrix.indptr[i + 1]] for i in range(len(self))[index]]
 
     def __iter__(self):
         return (self[i] for i in range(len(self)))
