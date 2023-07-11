@@ -217,7 +217,7 @@ def _triangulate(sdf, job, sparse=True):
         vertices, faces, _, _ = measure.marching_cubes(
             volume,
             level=0,
-            # allow_degenerate=False,
+            allow_degenerate=False,
         )
     except Exception as e:
         if e.args[0] == "Surface level must be within volume data range.":
