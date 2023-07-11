@@ -1161,9 +1161,9 @@ class TriangleMesh(Geometry):
         self,
         other: TriangleMesh,
         crop: bool = False,
-        cull: bool = False,
         threshold: float | None = None,
         exact: bool = False,
+        resolve: bool = False,
     ):  
         """Create a mesh enclosing the logical intersection of the volume represented by this mesh and another mesh.
 
@@ -1173,12 +1173,12 @@ class TriangleMesh(Geometry):
             Other mesh.
         crop : `bool`, optional (default: False)
             Crop the original mesh with the volume of the intersection by only keeping faces from the original mesh.
-        cull : `bool`, optional (default: False)
-            Don't bother resolving intersections and make a good guess from the original faces.
         threshold : `float`, optional (default: None)
             Winding number threshold for determining if a point is inside or outside the mesh.
         exact : `bool`, optional (default: False)
             If True, use exact winding number computation. If False, use fast approximation.
+        resolve : `bool`, optional (default: True)
+            If False, don't bother resolving intersections. Could be useful for fast approximations.
 
         Returns
         -------
@@ -1188,7 +1188,7 @@ class TriangleMesh(Geometry):
         A = self
         B = other
 
-        if not cull:
+        if resolve:
             is_intersecting, intersecting_face_pairs = A.detect_intersection(B, return_index=True) # type: ignore
 
             if is_intersecting:
@@ -1206,10 +1206,10 @@ class TriangleMesh(Geometry):
                 B = resolved.submesh(~from_a) + B.submesh(~b_intersections)
         
         def faces_inside(a: TriangleMesh, b: TriangleMesh):
-            if cull:
-                all_corners = a.faces.corners.reshape(-1, 3)
-                inside_corners = b.contains(all_corners, threshold=threshold, exact=exact)
-                return np.any(inside_corners.reshape(-1, 3), axis=1)
+            # if not resolve:
+            #     all_corners = a.faces.corners.reshape(-1, 3)
+            #     inside_corners = b.contains(all_corners, threshold=threshold, exact=exact)
+            #     return np.any(inside_corners.reshape(-1, 3), axis=1)
             
             inside = np.full(a.n_faces, False)
             
@@ -1247,13 +1247,13 @@ class TriangleMesh(Geometry):
         res = res.remove_duplicated_faces()
         return res
     
-    def difference(self, other: TriangleMesh, crop=False, cull=False, threshold=None, exact=False):
-        return self.intersection(other.invert(), crop=crop, cull=cull, threshold=threshold, exact=exact)
+    def difference(self, other: TriangleMesh, crop=False, resolve=False, threshold=None, exact=False):
+        return self.intersection(other.invert(), crop=crop, resolve=resolve, threshold=threshold, exact=exact)
 
-    def union(self, other: TriangleMesh, crop=False, cull=False, threshold=None, exact=False):
-        return self.invert().intersection(other.invert(), crop=crop, cull=cull, threshold=threshold, exact=exact).invert()
+    def union(self, other: TriangleMesh, crop=False, resolve=False, threshold=None, exact=False):
+        return self.invert().intersection(other.invert(), crop=crop, resolve=resolve, threshold=threshold, exact=exact).invert()
     
-    def crop(self, other: TriangleMesh, cull=False, threshold=None, exact=False):
+    def crop(self, other: TriangleMesh, resolve=False, threshold=None, exact=False):
         """Crop by removing the part of self that is outside the other mesh.
         This is equivalent to intersection with crop=True.
 
@@ -1261,15 +1261,15 @@ class TriangleMesh(Geometry):
         ----------
         other : `TriangleMesh`
             Other mesh.
-        cull : `bool`, optional (default: False)
-            If True, remove faces by simply culling them instead of resolving intersections.
+        resolve : `bool`, optional (default: True)
+            If False, don't bother resolving intersections. Could be useful for fast approximations.
 
         Returns
         -------
         `TriangleMesh`
             Cropped mesh.
         """
-        return self.intersection(other, crop=True, cull=cull, threshold=threshold, exact=exact)
+        return self.intersection(other, crop=True, resolve=resolve, threshold=threshold, exact=exact)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__}(vertices.shape={self.vertices.shape}, faces.shape={self.faces.shape})>"
