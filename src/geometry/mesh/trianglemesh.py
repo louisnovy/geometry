@@ -29,6 +29,7 @@ class TriangleMesh(Geometry):
     ):
         self.vertices: Vertices = Vertices(vertices, mesh=self)
         self.faces: Faces = Faces(faces, mesh=self)
+        self._encloses_infinity = False
 
     @classmethod
     def empty(cls, dim: int, dtype=None):
@@ -320,7 +321,7 @@ class TriangleMesh(Geometry):
             raise ValueError("`queries` must be a 2D `ArrayLike`.")
 
         threshold = 0.5 if threshold is None else threshold
-        inverted = self.volume < 0
+        inverted = self._encloses_infinity or self.volume < 0
 
         if inverted:
             threshold *= -1
@@ -659,6 +660,11 @@ class TriangleMesh(Geometry):
         >>> ~(~A & ~B) # union (equivalent to A | B)
         >>> ~(A & B) # De Morgan's laws apply so this is equivalent to ~A | ~B
         """
+        if self.is_empty:
+            r = type(self)()
+            r._encloses_infinity = not self._encloses_infinity
+            return r
+
         return type(self)(self.vertices, self.faces[:, ::-1])
 
     def concatenate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
