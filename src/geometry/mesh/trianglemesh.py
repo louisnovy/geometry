@@ -1163,7 +1163,7 @@ class TriangleMesh(Geometry):
         crop: bool = False,
         threshold: float | None = None,
         exact: bool = False,
-        resolve: bool = False,
+        resolve: bool = True,
     ):  
         """Create a mesh enclosing the logical intersection of the volume represented by this mesh and another mesh.
 
