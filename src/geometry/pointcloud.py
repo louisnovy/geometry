@@ -9,16 +9,16 @@ from scipy.spatial import cKDTree
 from .array import Array
 from .base import Geometry
 from .bounds import AABB
-from .sdf import SDF
 from .utils import unique_rows
+from . import sdf
 
-class Points(Array, Geometry):
+class PointCloud(Array, Geometry):
     """A collection of points in n-dimensional space."""
     def __new__(
         cls,
         points: ArrayLike,
         **kwargs,
-    ) -> Points:
+    ) -> PointCloud:
         # self = super().__new__(cls, points, **kwargs)
         self = np.asarray(points).astype(np.float64).view(cls)
         if self.ndim != 2:
@@ -60,6 +60,11 @@ class Points(Array, Geometry):
     def obb(self):
         raise NotImplementedError
     
+    @cached_property
+    def bounding_sphere(self):
+        """`Sphere` that bounds the points."""
+        raise NotImplementedError
+    
     @property
     def is_planar(self):
         """`True` if all points are coplanar."""
@@ -71,8 +76,8 @@ class Points(Array, Geometry):
         return cKDTree(self)
     
     @cached_property
-    def distance(self) -> SDF:
-        """Distance from each point to the nearest neighbor."""
+    def distance(self) -> sdf.SDF:
+        """Distance from each query to the nearest neighbor."""
         def _distance(x, return_index=False, return_closest=False):
             r = self.kdtree.query(x, workers=-1)
             out = r[0]
@@ -86,17 +91,17 @@ class Points(Array, Geometry):
                 out = tuple(out)
             return out
 
-        return SDF(_distance, self.aabb)
+        return sdf.SDF(_distance, self.aabb)
     
     @cached_property
-    def signed_distance(self) -> SDF:
+    def signed_distance(self) -> sdf.SDF:
         return self.distance
     
     @cached_property
-    def sdf(self) -> SDF:
+    def sdf(self) -> sdf.SDF:
         return self.distance
     
-    def downsample(self, epsilon: float, method: Literal["poisson", "grid"] = "poisson") -> Points:
+    def downsample(self, epsilon: float, method: Literal["poisson", "grid"] = "poisson") -> PointCloud:
         """Downsample the point cloud using the specified method."""
         return {"poisson": downsample_poisson, "grid": downsample_grid}[method](self, epsilon)
 
@@ -105,7 +110,7 @@ class Points(Array, Geometry):
         ps.init()
         ps.set_up_dir("z_up")
         ps.set_ground_plane_mode("none")
-        points = ps.register_point_cloud(name or str(id(self)), self)
+        points = ps.register_point_cloud(name or str(id(self)), self, radius=0.001)
         points.add_color_quantity("colors", self.colors) if self.colors is not None else None
         # ps.show()
         return self
@@ -116,10 +121,11 @@ class Points(Array, Geometry):
         ps.show()
 
 
-def downsample_poisson(points: Points, radius: float) -> Points:
+def downsample_poisson(points: PointCloud, radius: float) -> PointCloud:
     """Downsample a point cloud by removing neighbors within a given radius."""
-    if not isinstance(points, Points):
-        points = Points(points)
+    if not isinstance(points, PointCloud):
+        points = PointCloud(points)
+
     tree = points.kdtree
     # mask of points to keep
     mask = np.ones(len(points), dtype=bool)
@@ -127,23 +133,76 @@ def downsample_poisson(points: Points, radius: float) -> Points:
         if not mask[i]: # already ruled out
             continue
         # find neighbors within radius
-        neighbors = tree.query_ball_point(points[i], radius)
+        neighbors = tree.query_ball_point(points[i], radius) # type: ignore
         # remove neighbors from mask
         mask[neighbors] = False
         # keep current point
         mask[i] = True
 
-    return points[mask]
+    return points[mask] # type: ignore
 
-def downsample_grid(points: Points, pitch: float) -> Points:
+def downsample_grid(points: PointCloud, pitch: float, quantize: bool = False) -> PointCloud:
     """Downsample a point cloud by removing points that fall within a given grid pitch."""
-    if not isinstance(points, Points):
-        points = Points(points)
-    # find unique grid cells (bins)
-    bins = (points - points.aabb.min) / pitch
+    if not isinstance(points, PointCloud):
+        points = PointCloud(points)
+
     # round down to nearest integer so that points in the same cell have the same index
-    bins = np.floor(bins).astype(int)
+    bins = np.floor((points - points.aabb.min) / pitch).astype(int)
     # find first index of each
     unique_idx = unique_rows(bins, return_index=True)[1]
-    # transform to centers of grid cells
-    return (bins[unique_idx] + 0.5) * pitch + points.aabb.min
+
+    if quantize:
+        # transform to centers of grid cells
+        return (bins[unique_idx] + 0.5) * pitch + points.aabb.min
+
+    return points[unique_idx] # type: ignore
+
+
+def fibonacci_sphere(
+    radius: float = 1.0,
+    *,
+    n: int = 100,
+    spacing: float | None = None,
+    center: ArrayLike = [0.0, 0.0, 0.0],
+) -> PointCloud:
+    """
+    Create approximately uniformly distributed points on the surface of a sphere
+    using the Fibonacci spiral method.
+
+    Parameters
+    ----------
+    radius : float, optional
+        Radius of the sphere, by default 1.0
+    n : int, optional
+        Number of points to generate, by default 100
+    spacing : float, optional
+        Approximate spacing between points. Overrides `n` if provided.
+    center : ArrayLike, optional
+        Center of the sphere, by default [0.0, 0.0, 0.0]
+
+    Returns
+    -------
+    Points
+        Points on the surface of a sphere.
+    """
+    if spacing is not None:
+        n = int(np.ceil(4 * np.pi * radius ** 2 / spacing ** 2))
+    
+    samples = np.empty((n, 3))
+    
+    phi = np.pi * (np.sqrt(5) - 1)
+    theta = phi * np.arange(samples.shape[0])
+    
+    # samples[:, 1] = 1 - 2 * np.arange(n) / (n - 1)
+    # samples[:, 0] = np.cos(theta) * np.sqrt(1 - samples[:, 1] ** 2)
+    # samples[:, 2] = np.sin(theta) * np.sqrt(1 - samples[:, 1] ** 2)
+
+    # origin at z-axis instead
+    samples[:, 2] = 1 - 2 * np.arange(n) / (n - 1)
+    samples[:, 0] = np.cos(theta) * np.sqrt(1 - samples[:, 2] ** 2)
+    samples[:, 1] = np.sin(theta) * np.sqrt(1 - samples[:, 2] ** 2)
+
+    samples *= radius
+    samples += np.asanyarray(center)
+
+    return PointCloud(samples)

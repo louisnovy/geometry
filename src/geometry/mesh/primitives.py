@@ -1,29 +1,55 @@
 import numpy as np
 from numpy.typing import ArrayLike
-from .trianglemesh import TriangleMesh
+from .trianglemesh import TriangleMesh, convex_hull
+from .. import pointcloud
 
 
-def ngon(n=6, radius=1, angle=0) -> TriangleMesh:
-    """Regular `n`-gon centered at the origin."""
-    if not n >= 3:
-        raise ValueError("ngons must have at least 3 sides")
-    verts = np.empty((n, 3))
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False) + angle
-    verts[:, 0] = np.cos(angles) * radius
-    verts[:, 1] = np.sin(angles) * radius
-    verts[:, 2] = 0
-    faces = np.empty((n, 3), dtype=int)
-    faces[:, 0] = np.arange(n)
-    faces[:, 1] = np.roll(np.arange(n), -1)
-    faces[:, 2] = n
-    return TriangleMesh(verts, faces)
+def _size_to_bounds(size: float | ArrayLike, center: ArrayLike | None) -> tuple[np.ndarray, np.ndarray]:
+    size = np.asarray(size)
+    shape = size.shape
+
+    if shape in ((), (3,)):
+        if center is None:
+            center = np.zeros(3)
+        else:
+            center = np.asarray(center)
+        a = center - size / 2
+        b = center + size / 2
+    elif shape == (2, 3):
+        if center is not None:
+            raise ValueError("Cannot specify center when specifying bounds")
+        a, b = size
+    else:
+        raise ValueError("size must be a float, single vector, or pair of vectors")
+
+    return a, b
 
 
-def box(min=(-1, -1, -1), max=(1, 1, 1)):
-    """Axis-aligned box."""
-    a, b = np.asanyarray(min), np.asanyarray(max)
-    if not a.shape == b.shape == (3,):
-        raise ValueError("min and max must be 3D vectors")
+def box(
+    size: float | ArrayLike = 1.0,
+    *,
+    center: ArrayLike | None = None,
+) -> TriangleMesh:
+    """
+    `TriangleMesh` of a box.
+
+    Parameters
+    ----------
+    size : `float` | `ArrayLike`
+        The size of the box.
+        If a float, create a cube with side length `size`.
+        If a single vector, create a box with side lengths given by the vector.
+        If a pair of vectors, create a box with bounds given by the vectors.
+    center : `ArrayLike`, optional
+        The center of the box.
+        An error will be raised if attempting to create when specifying bounds.
+
+    Returns
+    -------
+    `TriangleMesh`
+        The box.
+    """
+    a, b = _size_to_bounds(size, center)
 
     vertices = [
         (a[0], a[1], a[2]),
@@ -50,7 +76,7 @@ def box(min=(-1, -1, -1), max=(1, 1, 1)):
         (6, 7, 4),
         (5, 6, 4),
     ]
-    
+
     return TriangleMesh(vertices, faces)
 
 
@@ -64,16 +90,45 @@ def tetrahedron():
 
 def hexahedron():
     """Hexahedron centered at the origin."""
-    return box(min=(-1, -1, -1), max=(1, 1, 1))
+    return box()
 
 
 def octahedron():
-    """Octahedron centered at the origin."""
+    """
+    `TriangleMesh` of an octahedron.
+
+    Returns
+    -------
+    `TriangleMesh`
+        The octahedron.
+    """
     return uv_sphere(u=4, v=2)
 
 
-def icosahedron():
-    """Unit icosahedron centered at the origin."""
+def icosahedron(
+    size: float | ArrayLike = 1.0,
+    *,
+    center: ArrayLike | None = None,
+):
+    """
+    `TriangleMesh` of an icosahedron.
+
+    Parameters
+    ----------
+    size : `float` | `ArrayLike`, optional (default: 1.0)
+        The size of the icosahedron.
+        If a scalar, the icosahedron will have a radius of `size`.
+        If a vector, the icosahedron will be scaled to fill bounds with `size`.
+        If a pair of vectors, the icosahedron will be scaled to fill the box with bounds given by the vectors.
+    center : `ArrayLike`, optional (default: ORIGIN)
+        The center of the icosahedron.
+
+    Returns
+    -------
+    `TriangleMesh`
+        The icosahedron.
+    """
+
     a = 0.525731112119133606025669084848876
     b = 0.850650808352039932181540497063011
     c = 0.0
@@ -116,7 +171,77 @@ def icosahedron():
         (9, 8, 1),
     ]
 
+    vertices = np.array(vertices)
+    vertices *= size
+
+    if center is not None:
+        vertices += np.asanyarray(center)
+
     return TriangleMesh(vertices, faces)
+
+
+def fibonacci_sphere(
+    radius: float = 1.0,
+    *,
+    n: int = 100,
+    spacing: float | None = None,
+    center: ArrayLike = [0.0, 0.0, 0.0],
+) -> TriangleMesh:
+    """
+    `TriangleMesh` of a sphere using points sampled from a Fibonacci spiral on the surface.
+
+    Parameters
+    ----------
+    radius : float, optional
+        Radius of the sphere, by default 1.0
+    n : int, optional
+        Number of points to generate, by default 100
+    spacing : float, optional
+        Approximate spacing between points. Overrides `n` if provided.
+    center : ArrayLike, optional
+        Center of the sphere, by default [0.0, 0.0, 0.0]
+
+    Returns
+    -------
+    `TriangleMesh`
+        The sphere.
+    """
+
+    return convex_hull(pointcloud.fibonacci_sphere(radius, center=center, n=n, spacing=spacing))
+
+
+def ico_sphere(
+    radius: float = 1.0,
+    *,
+    subdivisions: int = 3,
+    center: ArrayLike = [0.0, 0.0, 0.0],
+) -> TriangleMesh:
+    """
+    `TriangleMesh` approximating a sphere using subdivision of an icosahedron.
+
+    Parameters
+    ----------
+    radius : `float`, optional (default: 1.0)
+        The radius of the sphere.
+    subdivisions : `int`, optional (default: 3)
+        The number of subdivisions of the icosahedron to perform.
+    center : `ArrayLike`, optional (default: ORIGIN)
+        The center of the sphere.
+
+    Returns
+    -------
+    `TriangleMesh`
+        The ico sphere.
+    """
+    m = icosahedron()
+    for _ in range(subdivisions):
+        m = m.subdivide()
+
+    sphere_vertices = m.vertices / np.linalg.norm(m.vertices, axis=-1, keepdims=True)
+    sphere_vertices *= radius
+    sphere_vertices += center
+
+    return TriangleMesh(sphere_vertices, m.faces)
 
 
 # TODO: api should be cone(p0, p1, radius, n, cap=True)
@@ -186,7 +311,13 @@ def cylinder(n: int, cap=True):
     return TriangleMesh(verts, faces)
 
 
-def uv_sphere(u=32, v=16):
+def uv_sphere(
+    radius: float = 1.0,
+    *,
+    center: ArrayLike = [0.0, 0.0, 0.0],
+    u=32,
+    v=16,
+) -> TriangleMesh:
     """
     `TriangleMesh` approximating a unit sphere centered at the origin
     by using a UV parameterization.
@@ -247,25 +378,40 @@ def uv_sphere(u=32, v=16):
     faces[idx, 1] = d
     faces[idx, 2] = b
 
+    verts *= radius
+    verts += np.asanyarray(center)
+
     return TriangleMesh(verts, faces)
 
 
 def torus(
-    tube_radius=0.5,
-    u=16,
-    v=32,
+    major_radius: float = 1.0,
+    minor_radius: float = 0.25,
+    *,
+    center: ArrayLike = [0.0, 0.0, 0.0],
+    u: int = 16,
+    v: int = 32,
 ):
     """
-    `TriangleMesh` approximating a torus centered at the origin by using a UV
-    parameterization.
+    `TriangleMesh` approximating a torus using a UV parameterization.
 
-    Args:
-        tube_radius: Radius of the tube.
-        u: Number of segments along the tube.
-        v: Number of segments along the ring.
+    Parameters
+    ----------
+    major_radius : float
+        The radius of the center of the torus.
+    minor_radius : float
+        The radius of the tube of the torus.
+    u : int
+        Number of segments along the longitude.
+    v : int
+        Number of segments along the latitude.
+
+    Returns
+    -------
+    `TriangleMesh`
     """
-    if not all([u > 2, v > 2]):
-        raise ValueError("u and v must be greater than 2")
+    if not all([u >= 3, v >= 3]):
+        raise ValueError("u and v must be at least 3")
 
     verts = np.zeros((u * v, 3))
 
@@ -274,9 +420,9 @@ def torus(
     u_angle = 2 * np.pi * j / u
     v_angle = 2 * np.pi * i / v
 
-    verts[:, 0] = (1 + tube_radius * np.cos(u_angle)) * np.cos(v_angle)
-    verts[:, 1] = (1 + tube_radius * np.cos(u_angle)) * np.sin(v_angle)
-    verts[:, 2] = tube_radius * np.sin(u_angle)
+    verts[:, 0] = (major_radius - minor_radius * np.cos(v_angle)) * np.cos(u_angle)
+    verts[:, 1] = (major_radius - minor_radius * np.cos(v_angle)) * np.sin(u_angle)
+    verts[:, 2] = minor_radius * np.sin(v_angle)
 
     faces = np.zeros((2 * u * v, 3), dtype=np.int32)
 
@@ -298,5 +444,7 @@ def torus(
     faces[idx, 0] = a
     faces[idx, 1] = c
     faces[idx, 2] = d
+
+    verts += np.asanyarray(center)
 
     return TriangleMesh(verts, faces)

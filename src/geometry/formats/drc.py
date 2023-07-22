@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import mesh
-from .. import points
+from .. import pointcloud
 import DracoPy
 
 from os import stat
@@ -11,7 +11,7 @@ from pathlib import Path
 
 extensions = [".drc", ".draco"]
 
-def load(path: str | Path) -> mesh.TriangleMesh | points.Points:
+def load(path: str | Path) -> mesh.TriangleMesh | pointcloud.PointCloud:
     with open(path, "rb") as f:        
         obj = DracoPy.decode(f.read())
         colors = obj.colors / 255 if obj.colors is not None else None
@@ -25,15 +25,15 @@ def load(path: str | Path) -> mesh.TriangleMesh | points.Points:
         if hasattr(obj, "faces"):
             return mesh.TriangleMesh(obj.points, obj.faces)
 
-        return points.Points(obj.points)
+        return pointcloud.PointCloud(obj.points)
     
-def save(obj: mesh.TriangleMesh | points.Points, path: str | Path, **kwargs) -> None:
+def save(obj: mesh.TriangleMesh | pointcloud.PointCloud, path: str | Path, **kwargs) -> None:
     with open(path, "wb") as f:
         # preserve order by default. allows referencing vertices by index after i/o
         if "preserve_order" not in kwargs:
             kwargs["preserve_order"] = True
         
-        if isinstance(obj, points.Points):
+        if isinstance(obj, pointcloud.PointCloud):
             colors = obj.colors
         else:
             colors = obj.vertices.colors
@@ -41,7 +41,7 @@ def save(obj: mesh.TriangleMesh | points.Points, path: str | Path, **kwargs) -> 
         if colors is not None:
             colors = (colors * 255).astype(np.uint8)
 
-        if isinstance(obj, points.Points):
+        if isinstance(obj, pointcloud.PointCloud):
             f.write(DracoPy.encode(obj, colors=colors, **kwargs))
             return 
         

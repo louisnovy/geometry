@@ -25,10 +25,10 @@ def unique_rows(a: ArrayLike, **kwargs) -> np.ndarray | tuple[np.ndarray, ...]:
     """A significantly faster version of np.unique(array, axis=0, **kwargs).
     https://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array"""
 
-    a = np.asarray(a)
+    a = np.asanyarray(a)
     a = a.reshape(a.shape[0], np.prod(a.shape[1:], dtype=int))
 
-    void_view = np.ascontiguousarray(a).view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
+    void_view = np.asanyarray(a, order="C").view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
     out = np.unique(void_view, **kwargs)
 
     if isinstance(out, tuple):
@@ -85,8 +85,14 @@ class Adjacency:
         except Exception as e:
             return [matrix.indices[matrix.indptr[i] : matrix.indptr[i + 1]] for i in range(len(self))[index]]
 
+        # try:
+        #     return matrix.indices[matrix.indptr[index - 1] : matrix.indptr[index]]
+        # except Exception as e:
+        #     return [matrix.indices[matrix.indptr[i - 1] : matrix.indptr[i]] for i in range(len(self))[index]]
+
     def __iter__(self):
         return (self[i] for i in range(len(self)))
 
     def __len__(self):
         return len(self.matrix.indptr) - 1
+        # return len(self.matrix.indptr)

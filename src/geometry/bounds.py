@@ -4,12 +4,16 @@ from numpy.typing import ArrayLike
 import numpy as np
 from .array import Array
 from .base import Geometry
-from . import points
+from . import pointcloud
+
 
 class AABB(Geometry):
     """Axis-aligned bounding box in n-dimensions."""
 
     def __init__(self, *args):
+        if args == ():
+            args = (np.empty(0), np.empty(0))
+
         try:
             min, max = args
         except ValueError:
@@ -67,7 +71,7 @@ class AABB(Geometry):
             The sampled points.
         """
         # TODO: random seed handling
-        return points.Points(np.random.uniform(self.min, self.max, (n, self.dim)))
+        return pointcloud.PointCloud(np.random.uniform(self.min, self.max, (n, self.dim)))
     
     def sample_boundary(self, n=1, return_index=False):
         """Uniformly sample `n` points on the boundary of the AABB.
@@ -93,7 +97,7 @@ class AABB(Geometry):
         facet_points = np.random.uniform(0, 1, (n, self.dim))
         facet_points[np.arange(n), facet_indices // 2] = facet_indices % 2
 
-        samples = points.Points(self.min + facet_points * self.extents)
+        samples = pointcloud.PointCloud(self.min + facet_points * self.extents)
 
         if return_index:
             return samples, facet_indices
@@ -115,17 +119,15 @@ class AABB(Geometry):
             Whether each query point is contained within the AABB.
         """
         queries = np.asanyarray(queries)
+        # return np.all((self.min < queries) & (queries < self.max), axis=1)
         contained = np.full(queries.shape[0], True)
         for i in range(self.dim):
-            contained &= (self.min[i] <= queries[:, i]) & (queries[:, i] <= self.max[i])
+            contained &= (self.min[i] < queries[:, i]) & (queries[:, i] < self.max[i])
         return contained
 
     def detect_intersection(self, other: AABB) -> bool:
         """Check whether the AABB intersects another AABB."""
-        for i in range(self.dim):
-            if self.max[i] < other.min[i] or self.min[i] > other.max[i]:
-                return False
-        return True
+        return bool(np.all(self.min <= other.max) and np.all(self.max >= other.min))
     
     def offset(self, offset) -> AABB:
         return type(self)(self.min - offset, self.max + offset)

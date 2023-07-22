@@ -1,12 +1,13 @@
 from .trianglemesh import *
 
 from .primitives import (
-    ngon,
     box,
     tetrahedron,
     hexahedron,
     octahedron,
     icosahedron,
+    fibonacci_sphere,
+    ico_sphere,
     uv_sphere,
     cylinder,
     cone,

@@ -2,7 +2,6 @@ import unittest
 import numpy as np
 from geometry.utils import unitize
 from geometry.mesh.primitives import (
-    ngon,
     box,
     tetrahedron,
     hexahedron,

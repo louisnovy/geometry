@@ -33,9 +33,13 @@ class Array(np.ndarray):
     def __new__(cls, *args, **kwargs):
         # allows construction like TrackedArray([1, 2, 3], dtype=float)
         # TODO: pybind complains if we don't copy like this
-        self = np.array(*args, **kwargs).view(cls)
+        # self = np.array(*args, **kwargs).view(cls)
         # self = np.ascontiguousarray(*args, **kwargs).view(cls)
-        
+        self = np.asanyarray(*args, **kwargs).view(cls)
+        if not self.flags.contiguous:
+            # print(f"{cls.__name__} is not contiguous.")
+            self = self.copy(order="C")
+
         # if not mutable:
         #     self.flags.writeable = False
         return self
