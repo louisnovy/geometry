@@ -8,9 +8,8 @@ from scipy.spatial import cKDTree
 
 from .array import Array
 from .base import Geometry
-from .bounds import AABB
 from .utils import unique_rows
-from . import sdf
+from . import sdf, bounds
 
 class PointCloud(Array, Geometry):
     """A collection of points in n-dimensional space."""
@@ -19,8 +18,8 @@ class PointCloud(Array, Geometry):
         points: ArrayLike,
         **kwargs,
     ) -> PointCloud:
-        # self = super().__new__(cls, points, **kwargs)
-        self = np.asarray(points).astype(np.float64).view(cls)
+        self = super().__new__(cls, points, **kwargs)
+        # self = np.asanyarray(points).astype(np.float64).view(cls)
         if self.ndim != 2:
             raise ValueError(f"Points array must be 2D, got {self.ndim}D")
         return self
@@ -48,13 +47,13 @@ class PointCloud(Array, Geometry):
         return self.shape[1]
 
     @property
-    def aabb(self) -> AABB:
+    def aabb(self) -> bounds.AABB:
         """`AABB` of the points."""
         try:
-            return AABB(self.min(axis=0), self.max(axis=0))
+            return bounds.AABB(self.min(axis=0), self.max(axis=0))
         except ValueError:
             infs = np.full(self.dim, np.inf)
-            return AABB(-infs, infs)
+            return bounds.AABB(-infs, infs)
 
     @property
     def obb(self):
@@ -193,10 +192,6 @@ def fibonacci_sphere(
     phi = np.pi * (np.sqrt(5) - 1)
     theta = phi * np.arange(samples.shape[0])
     
-    # samples[:, 1] = 1 - 2 * np.arange(n) / (n - 1)
-    # samples[:, 0] = np.cos(theta) * np.sqrt(1 - samples[:, 1] ** 2)
-    # samples[:, 2] = np.sin(theta) * np.sqrt(1 - samples[:, 1] ** 2)
-
     # origin at z-axis instead
     samples[:, 2] = 1 - 2 * np.arange(n) / (n - 1)
     samples[:, 0] = np.cos(theta) * np.sqrt(1 - samples[:, 2] ** 2)

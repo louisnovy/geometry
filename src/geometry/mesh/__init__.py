@@ -9,7 +9,7 @@ from .primitives import (
     fibonacci_sphere,
     ico_sphere,
     uv_sphere,
-    cylinder,
+    capped_cone,
     cone,
     torus
 )

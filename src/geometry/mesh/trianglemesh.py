@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Literal, Type, Optional, overload, Callable
+from typing import Literal, Type, Optional, overload, Callable, Any
 from numpy.typing import ArrayLike
 from functools import cached_property, partial
 import itertools
@@ -12,13 +12,11 @@ from scipy.sparse import csr_array, csgraph
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 import _geometry as bindings
-from ..pointcloud import PointCloud
 from ..base import Geometry
-from ..bounds import AABB
 from ..utils import unique_rows, unitize, Adjacency
 from ..formats import load_mesh as load, save_mesh as save
 from ..array import Array
-from .. import sdf
+from .. import sdf, bounds, pointcloud
 
 
 class TriangleMesh(Geometry):
@@ -26,10 +24,11 @@ class TriangleMesh(Geometry):
         self,
         vertices: ArrayLike | None = None,
         faces: ArrayLike | None = None,
+        _encloses_infinity: bool = False,
     ):
         self.vertices: Vertices = Vertices(vertices, mesh=self)
         self.faces: Faces = Faces(faces, mesh=self)
-        self._encloses_infinity = False
+        self._encloses_infinity = _encloses_infinity
 
     @classmethod
     def empty(cls, dim: int, dtype=None):
@@ -72,12 +71,12 @@ class TriangleMesh(Geometry):
 
     # *** Basic properties ***
 
-    @property
+    @cached_property
     def n_vertices(self) -> int:
         """`int` : Number of `Vertices` in the mesh."""
         return len(self.vertices)
     
-    @property
+    @cached_property
     def n_faces(self) -> int:
         """`int` : Number of `Faces` in the mesh."""
         return len(self.faces)
@@ -85,10 +84,7 @@ class TriangleMesh(Geometry):
     @cached_property
     def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
-        # r = self.faces[:, [0, 2, 2, 1, 1, 0]].reshape(-1, 2)
-        # r.sort(axis=1)
-        # return r
-        return self.faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+        return self.faces[:, [0, 2, 2, 1, 1, 0]].reshape(-1, 2)
     
     @cached_property
     def _edge_maps(self):
@@ -100,7 +96,7 @@ class TriangleMesh(Geometry):
         edges, index, inverse, counts = unique_rows(self.halfedges, return_index=True, return_inverse=True, return_counts=True)
         return edges, index, inverse, counts
         
-    @property
+    @cached_property
     def n_halfedges(self) -> int:
         """`int` : Number of `Halfedges` in the mesh."""
         return len(self.halfedges)
@@ -114,7 +110,7 @@ class TriangleMesh(Geometry):
         # return edges
         return Edges.from_halfedges(self.halfedges, mesh=self)
                      
-    @property
+    @cached_property
     def n_edges(self) -> int:
         """`int` : Number of `Edges` in the mesh."""
         return len(self.edges)
@@ -129,12 +125,12 @@ class TriangleMesh(Geometry):
         """`int` : Number of surface-connected components in the mesh."""
         return csgraph.connected_components(self.faces.adjacency.matrix, directed=False, return_labels=False)
     
-    @property
+    @cached_property
     def dim(self):
         """`int` : Number of dimensions of the mesh."""
         return self.vertices.dim
 
-    @property
+    @cached_property
     def euler_characteristic(self) -> int:
         """`int` : Euler-Poincaré characteristic of the mesh.
 
@@ -142,7 +138,7 @@ class TriangleMesh(Geometry):
         """
         return self.n_vertices - self.n_edges + self.n_faces
 
-    @property
+    @cached_property
     def genus(self) -> int:
         """`int` : Genus of the mesh.
 
@@ -150,7 +146,7 @@ class TriangleMesh(Geometry):
         """
         return (2 - self.euler_characteristic) // 2
 
-    @property
+    @cached_property
     def area(self) -> float:
         """`float` : Total surface area of the mesh."""
         return self.faces.double_areas.sum() * 0.5
@@ -179,27 +175,27 @@ class TriangleMesh(Geometry):
             return (self.faces.centroids.T @ self.faces.areas / self.area).view(Array)
 
     @cached_property
-    def aabb(self) -> AABB:
+    def aabb(self) -> bounds.AABB:
         """`AABB` : Axis-aligned bounding box of the mesh."""
         return self.vertices.aabb
     
-    @property
-    def bounds(self) -> AABB:
+    @cached_property
+    def bounds(self) -> bounds.AABB:
         """`AABB` : For a mesh the bounds are an alias for the axis-aligned bounding box."""
         return self.aabb
 
-    @property
+    @cached_property
     def is_empty(self) -> bool:
         """`bool` : True if the mesh contains no useful data."""
         return self.n_faces == 0 | self.n_vertices == 0
 
-    @property
+    @cached_property
     def is_finite(self) -> bool:
         """`bool` : True if all vertices and faces are finite."""
         is_finite = lambda x: np.all(np.isfinite(x))
         return bool(is_finite(self.vertices) and is_finite(self.faces))
 
-    @property
+    @cached_property
     def is_closed(self) -> bool:
         """`bool` : True if the mesh is closed.
 
@@ -318,8 +314,6 @@ class TriangleMesh(Geometry):
 
         Notes
         -----
-        Approximate winding number accuracy decreases as abs(`threshold`) approaches 0.
-
         abs(`threshold`) > 0.5 can count points as contained by the mesh even if they are outside of the bounds of the mesh.
         """
         queries = np.asanyarray(queries, dtype=np.float64)
@@ -333,7 +327,7 @@ class TriangleMesh(Geometry):
             threshold *= -1
 
         def is_inside(queries):            
-            return self.winding_number(queries, exact=exact) > threshold
+            return self.winding_number(queries, exact=exact) >= threshold
         
         if not inverted and threshold >= 0.5:
             in_bounds = self.aabb.contains(queries)
@@ -343,45 +337,12 @@ class TriangleMesh(Geometry):
             
             if np.all(in_bounds):
                 return is_inside(queries)
-            
-            return np.where(in_bounds, is_inside(queries), False)
+                        
+            result = in_bounds # we don't need another allocation
+            result[in_bounds] = is_inside(queries[in_bounds])
+            return result
         
         return is_inside(queries)
-
-    def _distance(
-        self,
-        queries: ArrayLike,
-        squared=False,
-        signed=False,
-        return_index=False,
-        return_closest=False,
-        wn_threshold: float | None = None,
-        exact_wn=False,
-    ):
-        queries = np.asanyarray(queries, dtype=np.float64)
-        if not queries.ndim == 2:
-            raise ValueError("`queries` must be a 2D `ArrayLike`.")
-
-        # we could probably pass in flags to the C++ code, but this is a lot easier for now
-        # and is probably not actually degrading performance that much. the results of this
-        # use shared memory with the Eigen matrices so overhead should be minimal.
-        dists, indices, closest = self._aabbtree.squared_distance(queries)
-
-        if not squared:
-            dists **= 0.5
-        
-        if signed:
-            dists[self.contains(queries, threshold=wn_threshold, exact=exact_wn)] *= -1
-
-        if any([return_index, return_closest]):
-            out = [dists]
-            if return_index:
-                out.append(indices)
-            if return_closest:
-                out.append(PointCloud(closest)) # TODO: attribute propagation like normals and colors eventually
-            return tuple(out)
-
-        return dists
     
     @cached_property
     def distance(self):
@@ -420,29 +381,30 @@ class TriangleMesh(Geometry):
         -----
         If called on an empty mesh, returns `inf` for distances, `-1` for face indices and `inf` for closest points.
         """
-        return sdf.SDF(self._distance, self.aabb)
+        return sdf.SDF(partial(distance, self), self.aabb)
 
     @cached_property
     def signed_distance(self):
         """Callable `SDF` of the signed distance from each query to the surface of the mesh.
         This is an alias for `mesh.distance(signed=True)`.
         """
-        return sdf.SDF(partial(self._distance, signed=True), self.aabb)
+        return sdf.SDF(partial(distance, self, signed=True), self.aabb)
     
     @cached_property
     def sdf(self):
         """Callable `SDF` of the signed distance from each query to the surface of the mesh.
         This is an alias for `mesh.signed_distance`.
         """
-        return self.signed_distance
+        return sdf.SDF(partial(distance, self, signed=True), self.aabb)
     
     def sample_surface(
         self,
         n_samples: int,
+        *,
         face_weights = None,
         return_index: bool = False,
         seed: int | None = None,
-    ) -> PointCloud | tuple[PointCloud, np.ndarray]:
+    ) -> pointcloud.PointCloud | tuple[pointcloud.PointCloud, np.ndarray]:
         """Sample points on the surface of the mesh.
         
         Parameters
@@ -489,8 +451,48 @@ class TriangleMesh(Geometry):
         # map samples on the simplex to each face with a linear combination of the face's corners
         samples = np.einsum("ij,ijk->ik", barycentric, self.faces.corners[face_indices])
 
-        points = samples.view(PointCloud)
+        points = samples.view(pointcloud.PointCloud)
         return (points, face_indices) if return_index else points
+    
+    def sample(
+        self,
+        n_samples: int = 1,
+        *,
+        seed: int | None = None,
+    ) -> pointcloud.PointCloud:
+        """Sample points from the volume of the mesh.
+
+        Parameters
+        ----------
+        n_samples : `int`, optional
+            Number of samples to generate.
+        spacing : `float`, optional
+            Approximate spacing between samples.
+        seed : `int`, optional
+            Random seed for reproducible results.
+
+        Returns
+        -------
+        `PointCloud(n_samples, dim)`
+        """
+        if self.is_empty:
+            raise ValueError("Cannot sample from an empty mesh.")
+
+        # TODO: we can do much better than sampling the whole bounds every time by
+        # batching and skipping empty space with a tree
+        r = []
+        n = 0
+        while True:
+            points = self.aabb.sample(n_samples, seed = None if seed is None else seed + n)
+            inside = self.contains(points)
+            n += np.sum(inside)
+            r.append(points[inside])
+
+            if n >= n_samples:
+                break
+
+        return pointcloud.PointCloud(np.concatenate(r)[:n_samples])
+        
     
     # *** Transformations ***
 
@@ -505,7 +507,6 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Transformed mesh.
         """
         matrix = np.asanyarray(matrix, dtype=np.float64)
         new_vertices = (self.vertices @ matrix[:self.dim, :self.dim].T) + matrix[:self.dim, self.dim]
@@ -522,7 +523,6 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Translated mesh.
         """
         vector = np.asanyarray(vector, dtype=np.float64)
         if vector.shape != (self.dim,):
@@ -542,7 +542,6 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Mesh with copies distributed
         """
         points = np.asanyarray(points, dtype=np.float64)
         if points.shape[1] != self.dim:
@@ -578,7 +577,6 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Scaled mesh.
         """
         factor = np.broadcast_to(factor, self.dim)
 
@@ -609,7 +607,6 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Rotated mesh.
         """
         axis = np.asanyarray(axis, dtype=np.float64)
         if axis.shape != (self.dim,):
@@ -632,8 +629,8 @@ class TriangleMesh(Geometry):
         return self.transform(mat)
 
     # TODO: maybe name offset?
-    def dilate(self, offset: float) -> TriangleMesh:
-        """Dilate the mesh by moving each vertex along its normal by the given offset.
+    def offset(self, offset: float) -> TriangleMesh:
+        """Offset the mesh by moving each vertex along its normal by the given offset.
 
         Parameters
         ----------
@@ -643,7 +640,6 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Dilated mesh.
 
         Notes
         -----
@@ -651,32 +647,12 @@ class TriangleMesh(Geometry):
         """
         return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
     
-    def erode(self, offset: float) -> TriangleMesh:
-        """Erode the mesh by moving each vertex along its normal by the given offset.
-
-        Parameters
-        ----------
-        offset : `float` 
-            How far to move each vertex along its normal.
-
-        Returns
-        -------
-        `TriangleMesh`
-            Eroded mesh.
-
-        Notes
-        -----
-        May cause self-intersections.
-        """
-        return self.dilate(-offset)
-    
     def invert(self) -> TriangleMesh:
         """Invert the mesh. This is equivalent to using the unary `~` operator.
 
         Returns
         -------
         `TriangleMesh`
-            Inverted mesh.
 
         Examples
         --------
@@ -692,8 +668,7 @@ class TriangleMesh(Geometry):
         >>> ~(A & B) # De Morgan's laws apply so this is equivalent to ~A | ~B
         """
         if self.is_empty:
-            r = type(self)()
-            r._encloses_infinity = not self._encloses_infinity
+            r = type(self)(_encloses_infinity=not self._encloses_infinity)
             return r
 
         return type(self)(self.vertices, self.faces[:, ::-1])
@@ -709,7 +684,6 @@ class TriangleMesh(Geometry):
         Returns
         -------
         `TriangleMesh`
-            Concatenated mesh.
         """
         if not isinstance(other, list):
             other = [other]
@@ -1014,7 +988,7 @@ class TriangleMesh(Geometry):
         n_components, labels = csgraph.connected_components(matrix, directed=False)
         r = [m.submesh(np.flatnonzero(get_indices(i))) for i in range(n_components)]
 
-        if sort:
+        if sort and n_components > 1:
             if key is None:
                 key = lambda m: -m.area
             r.sort(key=key)
@@ -1030,10 +1004,11 @@ class TriangleMesh(Geometry):
             Unstitched mesh.
         """
         corners = self.faces.corners
-        v_per_face = corners.shape[-1]
+        v_per_face = corners.shape[1]
         vertices = corners.reshape(-1, v_per_face)
-        faces = np.arange(self.n_vertices).reshape(-1, v_per_face)
+        faces = np.arange(len(vertices)).reshape(-1, v_per_face)
         return type(self)(vertices, faces)
+
     
     # TODO: figure out typing overloads...
     def detect_intersection(
@@ -1258,6 +1233,7 @@ class TriangleMesh(Geometry):
             # inside[coplanar] &= np.any(b.contains((a.submesh(coplanar).faces.corners - jog.reshape(-1, 1, 3)).reshape(-1, 3), threshold=threshold, exact=exact).reshape(-1, 3), axis=1)
             return inside
 
+
         res = A.submesh(faces_inside(A, other))
         # res = A.submesh(faces_inside(A, B))
 
@@ -1275,6 +1251,11 @@ class TriangleMesh(Geometry):
 
     def union(self, other: TriangleMesh, crop=False, resolve=True, threshold=None, exact=False):
         return self.invert().intersection(other.invert(), crop=crop, resolve=resolve, threshold=threshold, exact=exact).invert()
+    
+    def symmetric_difference(self, other: TriangleMesh, crop=False, resolve=True, threshold=None, exact=False):
+        a = self.difference(other, crop=crop, resolve=resolve, threshold=threshold, exact=exact)
+        b = other.difference(self, crop=crop, resolve=resolve, threshold=threshold, exact=exact)
+        return (a + b).remove_duplicated_vertices()
     
     def crop(self, other: TriangleMesh, resolve=True, threshold=None, exact=False):
         """Crop by removing the part of self that is outside the other mesh.
@@ -1322,6 +1303,9 @@ class TriangleMesh(Geometry):
     
     def __or__(self, other: TriangleMesh) -> TriangleMesh:
         return self.union(other)
+    
+    def __xor__(self, other: TriangleMesh) -> TriangleMesh:
+        return self.symmetric_difference(other)
     
     def __invert__(self) -> TriangleMesh:
         return self.invert()
@@ -1379,7 +1363,7 @@ class TriangleMesh(Geometry):
         ps.show()
     
 
-class Vertices(PointCloud):
+class Vertices(pointcloud.PointCloud):
     def __new__(
         cls,
         vertices: ArrayLike,
@@ -1777,27 +1761,27 @@ class Faces(Array):
         return ~isclose(a, b) & ~isclose(b, c) & ~isclose(c, a)
     
     @cached_property
-    def centroids(self) -> PointCloud:
+    def centroids(self) -> pointcloud.PointCloud:
         """`Points (n, dim)` : Centroid of each face. Alias for `barycenters`."""
-        return PointCloud(self.corners.mean(axis=1))
+        return pointcloud.PointCloud(self.corners.mean(axis=1))
     
     @cached_property
-    def barycenters(self) -> PointCloud:
+    def barycenters(self) -> pointcloud.PointCloud:
         """`Points (n, dim)` : Barycenter of each face. Alias for `centroids`."""
         return self.centroids
     
     @cached_property
-    def circumcenters(self) -> PointCloud:
+    def circumcenters(self) -> pointcloud.PointCloud:
         """`Points (n, dim)` : Circumcenter of each face."""
         raise NotImplementedError
     
     @cached_property
-    def incenters(self) -> PointCloud:
+    def incenters(self) -> pointcloud.PointCloud:
         """`Points (n, dim)` : Incenter of each face."""
         raise NotImplementedError
     
     @cached_property
-    def orthocenters(self) -> PointCloud:
+    def orthocenters(self) -> pointcloud.PointCloud:
         """`Points (n, dim)` : Orthocenter of each face."""
         raise NotImplementedError
     
@@ -1871,8 +1855,11 @@ class Edges(Array):
     def midpoints(self):
         """`Points` of the midpoints of each edge."""
         vertices = self._mesh.vertices
-        return PointCloud((vertices[self[:, 0]] + vertices[self[:, 1]]) / 2)
+        return pointcloud.PointCloud((vertices[self[:, 0]] + vertices[self[:, 1]]) / 2)
+    
 
+empty = TriangleMesh()
+full = TriangleMesh(_encloses_infinity=True)
 
 def concatenate(meshes: list[TriangleMesh]) -> TriangleMesh:
     """Concatenate a list of meshes into a single mesh.
@@ -1890,8 +1877,79 @@ def concatenate(meshes: list[TriangleMesh]) -> TriangleMesh:
     return type(meshes[0])().concatenate(meshes)
 
 
+def distance(
+    m: TriangleMesh,
+    queries: pointcloud.PointCloud | ArrayLike,
+    squared=False,
+    signed=False,
+    return_index=False,
+    return_closest=False,
+    wn_threshold: float | None = None,
+    exact_wn=False,
+):
+    """Compute the distance from each query to the surface of the mesh.
+    
+    Parameters
+    ----------
+    queries : `ArrayLike` (n_queries, dim)
+        Query points.
+    squared : `bool`, optional
+        If True, return squared distances.
+    signed : `bool`, optional
+        If True, distances corresponding to queries contained by the mesh will be negative.
+    return_index : `bool`, optional
+        If True, also return the index of the closest face for each query point.
+    return_closest : `bool`, optional
+        If True, also return the closest point on the surface of the mesh for each query point.
+    wn_threshold : `float`, optional
+        If `signed` is True, this is the threshold for the winding number to be considered contained.
+    exact_wn : `bool`, optional
+        If True, use exact winding number instead of a much faster approximation.
+        
+    Returns
+    -------
+    `ndarray (n_queries,)`
+        Distance from each query point to the surface of the mesh.
+        
+    Optionally returns:
+
+    `ndarray (n_queries,)` (optional)
+        Index of the closest face for each query point.
+    `Points (n_queries, dim)` (optional)
+        Closest point on the surface of the mesh for each query point.
+
+    Notes
+    -----
+    If called on an empty mesh, returns `inf` for distances, `-1` for face indices and `inf` for closest points.
+    """
+    queries = np.asanyarray(queries, dtype=np.float64)
+    if not queries.ndim == 2:
+        raise ValueError("`queries` must be a 2D `ArrayLike`.")
+
+    # we could probably pass in flags to the C++ code, but this is a lot easier for now
+    # and is probably not actually degrading performance that much. the results of this
+    # use shared memory with the Eigen matrices so overhead should be minimal.
+    dists, indices, closest = m._aabbtree.squared_distance(queries)
+
+    if not squared:
+        dists **= 0.5
+    
+    if signed:
+        dists[m.contains(queries, threshold=wn_threshold, exact=exact_wn)] *= -1
+
+    if any([return_index, return_closest]):
+        out = [dists]
+        if return_index:
+            out.append(indices)
+        if return_closest:
+            out.append(pointcloud.PointCloud(closest)) # TODO: attribute propagation like normals and colors eventually
+        return tuple(out)
+
+    return dists
+
+
 def convex_hull(
-    obj: TriangleMesh | PointCloud | ArrayLike,
+    obj: TriangleMesh | pointcloud.PointCloud | ArrayLike,
     qhull_options: str | None = None,
     joggle_on_failure: bool = True,
 ):

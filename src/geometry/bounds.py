@@ -19,8 +19,8 @@ class AABB(Geometry):
         except ValueError:
             min, max = args[0]
 
-        self.min = np.asanyarray(min).view(Array)
-        self.max = np.asanyarray(max).view(Array)
+        self.min = np.asanyarray(min, dtype=float).view(Array)
+        self.max = np.asanyarray(max, dtype=float).view(Array)
 
         if not self.min.shape == self.max.shape:
             raise ValueError("min and max must have the same shape")
@@ -57,24 +57,26 @@ class AABB(Geometry):
     def diagonal(self) -> float:
         return float(np.linalg.norm(self.extents))
 
-    def sample(self, n=1):
+    def sample(self, n=1, *, seed: int | None = None):
         """Uniformly sample `n` points within the AABB.
         
         Parameters
         ----------
         n : `int`
             The number of points to sample.
+        seed : `int` (optional)
+            The random seed to use.
 
         Returns
         -------
         `Points` (n, dim)
             The sampled points.
         """
-        # TODO: random seed handling
-        return pointcloud.PointCloud(np.random.uniform(self.min, self.max, (n, self.dim)))
+        rng = np.random.default_rng(seed)
+        return pointcloud.PointCloud(rng.uniform(self.min, self.max, (n, self.dim)))
     
-    def sample_boundary(self, n=1, return_index=False):
-        """Uniformly sample `n` points on the boundary of the AABB.
+    def sample_surface(self, n=1, return_index=False, seed: int | None = None):
+        """Uniformly sample `n` points on the surface of the AABB.
         
         Parameters
         ----------
@@ -82,6 +84,8 @@ class AABB(Geometry):
             The number of points to sample.
         return_index : `bool`
             Whether to return the index of the facet on which each point lies.
+        seed : `int` (optional)
+            The random seed to use.
 
         Returns
         -------
@@ -91,17 +95,16 @@ class AABB(Geometry):
         `ndarray` (n,) (optional)
             The index of the facet on which each point lies.
         """
-        # TODO: random seed handling
-        facet_indices = np.random.randint(0, 2 * self.dim, n)
+        rng = np.random.default_rng(seed)
 
-        facet_points = np.random.uniform(0, 1, (n, self.dim))
+        facet_indices = rng.integers(0, 2 * self.dim, n)
+        facet_points = rng.uniform(0, 1, (n, self.dim))
+
         facet_points[np.arange(n), facet_indices // 2] = facet_indices % 2
-
         samples = pointcloud.PointCloud(self.min + facet_points * self.extents)
 
         if return_index:
             return samples, facet_indices
-
         return samples
 
     # TODO: this is suprisingly slow. write a c version to avoid all the intermediate arrays
@@ -119,10 +122,9 @@ class AABB(Geometry):
             Whether each query point is contained within the AABB.
         """
         queries = np.asanyarray(queries)
-        # return np.all((self.min < queries) & (queries < self.max), axis=1)
         contained = np.full(queries.shape[0], True)
         for i in range(self.dim):
-            contained &= (self.min[i] < queries[:, i]) & (queries[:, i] < self.max[i])
+            np.logical_and(self.min[i] < queries[:, i], queries[:, i] < self.max[i], out=contained)
         return contained
 
     def detect_intersection(self, other: AABB) -> bool:
@@ -131,27 +133,7 @@ class AABB(Geometry):
     
     def offset(self, offset) -> AABB:
         return type(self)(self.min - offset, self.max + offset)
-    
-    def boolean(self, other: AABB, op: str) -> AABB:
-        return type(self)(np.minimum(self.min, other.min), np.maximum(self.max, other.max))
-        if op == "union":
-            return type(self)(np.minimum(self.min, other.min), np.maximum(self.max, other.max))
-        elif op == "intersection":
-            return type(self)(np.maximum(self.min, other.min), np.minimum(self.max, other.max))
-        elif op == "difference":
-            return type(self)(self.min, self.max)
-        else:
-            raise ValueError(f"Invalid boolean operation: {op}")
         
-    def union(self, other: AABB) -> AABB:
-        return self.boolean(other, "union")
-
-    def intersection(self, other: AABB) -> AABB:
-        return self.boolean(other, "intersection")
-    
-    def difference(self, other: AABB) -> AABB:
-        return self.boolean(other, "difference")
-    
     def translate(self, vector: ArrayLike) -> AABB:
         return type(self)(self.min + vector, self.max + vector)
     

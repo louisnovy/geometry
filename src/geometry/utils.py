@@ -4,23 +4,6 @@ from numpy.typing import ArrayLike
 from scipy.sparse import csr_array
 
 
-def lerp(a, b, x=0.5):
-    """Linear interpolation between a and b."""
-    return a + (b - a) * x
-
-
-def smoothstep(a, b, x=0.5):
-    """https://en.wikipedia.org/wiki/Smoothstep"""
-    x = np.clip((x - a) / (b - a), 0, 1)
-    return x * x * (3 - 2 * x)
-
-
-def smootherstep(a, b, x=0.5):
-    """Like smoothstep but has zero first and second derivatives at a and b."""
-    x = np.clip((x - a) / (b - a), 0, 1)
-    return x * x * x * (x * (x * 6 - 15) + 10)
-
-
 def unique_rows(a: ArrayLike, **kwargs) -> np.ndarray | tuple[np.ndarray, ...]:
     """A significantly faster version of np.unique(array, axis=0, **kwargs).
     https://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array"""

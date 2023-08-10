@@ -1,10 +1,10 @@
 import numpy as np
 from numpy import cos, sin, pi
 from numpy.typing import ArrayLike
-from .sdf import SDF
+from .implicit import Implicit
 
 
-def gyroid() -> SDF:
+def gyroid():
     def f(p):
         p = p / 0.5 * pi
         x, y, z = p.T
@@ -15,20 +15,20 @@ def gyroid() -> SDF:
 
         return r
 
-    return SDF(f)
+    return Implicit(f)
 
 
-def schwarz() -> SDF:
+def schwarz():
     def f(p):
         p = p / 0.5 * pi
         x, y, z = p.T
 
         return cos(x) + cos(y) + cos(z)
 
-    return SDF(f)
+    return Implicit(f)
 
 
-def diamond() -> SDF:
+def diamond():
     def f(p):
         p = p / 0.5 * pi
         x, y, z = p.T
@@ -43,10 +43,10 @@ def diamond() -> SDF:
 
         return r
 
-    return SDF(f)
+    return Implicit(f)
 
 
-def neovius() -> SDF:
+def neovius():
     def f(p):
         p = p / 0.5 * pi
         x, y, z = p.T
@@ -58,10 +58,10 @@ def neovius() -> SDF:
 
         return a + b
 
-    return SDF(f)
+    return Implicit(f)
 
 
-def lidinoid() -> SDF:
+def lidinoid():
     def f(p):
         p = p / 0.5 * pi
         x, y, z = p.T
@@ -81,4 +81,4 @@ def lidinoid() -> SDF:
 
         return a - b + 0.3
 
-    return SDF(f)
+    return Implicit(f)

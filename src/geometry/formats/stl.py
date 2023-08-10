@@ -60,9 +60,8 @@ def load_ascii(path: str | Path):
 def load(path: str | Path):
     with open(path, "rb") as f:
         ascii = f.read(5) == b"solid"
-    if ascii:
-        data = load_ascii(path)
-    data = load_binary(path)
+
+    data = load_ascii(path) if ascii else load_binary(path)
 
     return mesh.TriangleMesh(*data).remove_duplicated_vertices()
 

@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import numpy as np
 from numpy.typing import ArrayLike
 from .trianglemesh import TriangleMesh, convex_hull
 from .. import pointcloud
 
+ORIGIN = np.zeros(3)
+X = np.array([1, 0, 0])
+Y = np.array([0, 1, 0])
+Z = np.array([0, 0, 1])
 
 def _size_to_bounds(size: float | ArrayLike, center: ArrayLike | None) -> tuple[np.ndarray, np.ndarray]:
     size = np.asarray(size)
@@ -267,20 +273,87 @@ def cone(n: int, cap=True):
     return TriangleMesh(verts, faces)
 
 
-# TODO: api should be cylinder(p0, p1, r0, r1, n, cap=True)
-def cylinder(n: int, cap=True):
+# # TODO: api should be cylinder(p0, p1, r0, r1, n, cap=True)
+# def cylinder(n: int, cap=True):
+#     verts = np.zeros((n * 2, 3))
+#     angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+
+#     # top ring
+#     verts[n:, 0] = np.cos(angles)
+#     verts[n:, 1] = np.sin(angles)
+#     verts[n:, 2] = 1
+
+#     # bottom ring
+#     verts[:n, 0] = np.cos(angles)
+#     verts[:n, 1] = np.sin(angles)
+#     verts[:n, 2] = 0
+
+#     faces = np.zeros((n * 2, 3), dtype=np.int32)
+
+#     # connect rings with triangles
+#     faces[:n, 0] = np.arange(n)
+#     faces[:n, 1] = np.roll(faces[:n, 0], -1)
+#     faces[:n, 2] = faces[:n, 0] + n
+#     faces[n:, 0] = faces[:n, 1]
+#     faces[n:, 1] = faces[:n, 1] + n
+#     faces[n:, 2] = faces[:n, 0] + n
+
+#     if cap:
+#         # centers
+#         verts = np.concatenate([verts, np.array([[0, 0, 0], [0, 0, 1]])], axis=0)
+
+#         cap1 = np.zeros((n, 3), dtype=np.int32)
+#         cap1[:, 0] = np.arange(n)
+#         cap1[:, 1] = n * 2
+#         cap1[:, 2] = np.roll(cap1[:, 0], -1)
+
+#         cap2 = np.zeros((n, 3), dtype=np.int32)
+#         cap2[:, 0] = np.arange(n, n * 2)
+#         cap2[:, 1] = n * 2 + 1
+#         cap2[:, 2] = np.roll(cap2[:, 0], 1)
+
+#         faces = np.concatenate([faces, cap1, cap2], axis=0)
+
+#     return TriangleMesh(verts, faces)
+
+def capped_cone(
+    a: ArrayLike = -Z,
+    b: ArrayLike = Z,
+    ra: float = 0.5,
+    rb: float = 0.5,
+    *,
+    n: int = 32,
+    cap: bool = True,
+) -> TriangleMesh:
+    
+    if not n >= 3:
+        raise ValueError("n must be at least 3")
+
+    a = np.asarray(a)
+    b = np.asarray(b)
+
+    axis = b - a
+    height = np.linalg.norm(axis)
+    axis = axis / height
+
     verts = np.zeros((n * 2, 3))
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
 
     # top ring
     verts[n:, 0] = np.cos(angles)
     verts[n:, 1] = np.sin(angles)
-    verts[n:, 2] = 1
+    verts[n:, 2] = height / 2
 
     # bottom ring
     verts[:n, 0] = np.cos(angles)
     verts[:n, 1] = np.sin(angles)
-    verts[:n, 2] = 0
+    verts[:n, 2] = -height / 2
+
+    verts[:n, :] *= ra
+    verts[n:, :] *= rb
+
+    verts[:n, :] += a
+    verts[n:, :] += a + axis * height
 
     faces = np.zeros((n * 2, 3), dtype=np.int32)
 
@@ -294,7 +367,7 @@ def cylinder(n: int, cap=True):
 
     if cap:
         # centers
-        verts = np.concatenate([verts, np.array([[0, 0, 0], [0, 0, 1]])], axis=0)
+        verts = np.concatenate([verts, np.array([a, b])], axis=0)
 
         cap1 = np.zeros((n, 3), dtype=np.int32)
         cap1[:, 0] = np.arange(n)
