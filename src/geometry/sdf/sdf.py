@@ -8,12 +8,14 @@ from tqdm import tqdm, trange
 import itertools
 import time
 import warnings
+import sys
 
 import numpy as np
 from numpy import maximum, minimum
-import sys
 
-from .. import mesh, bounds as _bounds, voxels  # TODO: did not forsee this conflict oops
+import dill
+
+from .. import mesh, bounds as _bounds, voxels, array  # TODO: did not forsee this conflict oops
 
 
 class SDF:
@@ -42,13 +44,13 @@ class SDF:
             sys.setrecursionlimit(target)
             return self.func(np.asarray(queries), **kwargs)
 
-    def __repr__(self) -> str:
-        try:
-            name = self.func.__qualname__.split(".")[0]
-        except AttributeError:
-            name = type(self.func).__name__
+    # def __repr__(self) -> str:
+    #     try:
+    #         name = self.func.__qualname__.split(".")[0]
+    #     except AttributeError:
+    #         name = type(self.func).__name__
 
-        return f"<{type(self).__name__}({name}) {self.bounds}>"
+    #     return f"<{type(self).__name__}({name}) {self.bounds}>"
     
     def slice_viewer(self, bounds=None, interactive=True):
         from matplotlib import pyplot as plt
@@ -393,35 +395,37 @@ class SDF:
         
         return SDF(f)
 
-    
     def invert(self):        
         r = type(self)(lambda p: -self(p))
         # hack to make A | B.k(n) or A & ~B.k(n) work
         r._k = self._k
         return r
 
-    def intersection(self, other: SDF, k=None):
+    def intersection(self, other: SDF, k=None, continuity=1):
+        order = continuity + 1
+
         def f(p):
             K = k or other._k
 
-            if K is None:
-                return np.maximum(self(p), other(p))
+            adists = self(p)
+            bdists = other(p)
 
-            a = self(p)
-            b = other(p)
-            h = np.maximum(K - np.abs(a - b), 0) / K
-            return np.maximum(a, b) + h**2 * K / 4
+            if K is None:
+                return np.maximum(adists, bdists)
+            
+            h = np.maximum(K - np.abs(adists - bdists), 0) / K
+            return np.maximum(adists, bdists) + h**order * K / (order * 2)
 
         return type(self)(f)
 
-    def difference(self, other: SDF, k=None):
-        return self.intersection(other.invert(), k=k)
+    def difference(self, other: SDF, k=None, continuity=1):
+        return self.intersection(other.invert(), k=k, continuity=continuity)
 
-    def union(self, other: SDF, k=None):
-        return self.invert().intersection(other.invert(), k=k).invert()
+    def union(self, other: SDF, k=None, continuity=1):
+        return self.invert().intersection(other.invert(), k=k, continuity=continuity).invert()
 
-    def symmetric_difference(self, other, k=None):
-        return self.union(other, k=k).difference(self.intersection(other, k=k), k=k)
+    def symmetric_difference(self, other, k=None, continuity=1):
+        return self.union(other, k=k).difference(self.intersection(other, k=k, continuity=continuity), k=k, continuity=continuity)
 
     def blend(self, other, k=0.5):
         def f(p):
@@ -462,7 +466,6 @@ class SDF:
 
     def __invert__(self):
         return self.invert()
-
 
 SAMPLES = 2**22
 BATCH_SIZE = 32
@@ -520,9 +523,7 @@ def skip_these_jobs(sdf: SDF, jobs):
     if np.any(idx):
         corners = np.array([list(itertools.product(*x)) for x in bounds[idx]])
         # turn into list of points for query and then back
-        contained = sdf.contains(corners.reshape(-1, corners.shape[-1])).reshape(
-            corners.shape[:-1]
-        )
+        contained = sdf.contains(corners.reshape(-1, corners.shape[-1])).reshape(corners.shape[:-1])
         # either all corners are inside or all corners are outside to skip
         to_skip[idx] = np.all(contained == contained[..., [0]], axis=-1)
 
@@ -531,8 +532,7 @@ def skip_these_jobs(sdf: SDF, jobs):
 
 def _marching_cubes(sdf, job):
     X, Y, Z = job
-    P = cartesian_product(X, Y, Z)
-    volume = sdf(P).reshape((len(X), len(Y), len(Z)))
+    volume = sdf(cartesian_product(X, Y, Z)).reshape((len(X), len(Y), len(Z)))
 
     try:
         vertices, faces, _, _ = measure.marching_cubes(
@@ -553,19 +553,25 @@ def _marching_cubes(sdf, job):
     # r.plot(properties=False)
     return r
 
+from joblib import Memory
+memory = Memory(location="./.geometry/cache", verbose=0, mmap_mode="r", bytes_limit=1e9)
 
+@memory.cache
 def triangulate(
     sdf: SDF,
     step=None,
     bounds=None,
     samples=SAMPLES,
     batch_size=BATCH_SIZE,
+    simplify=False,
     verbose=False,
     progress=False,
     sparse=True,
+    parallel=False,
     merge_batches=True,
 ):
     start = time.time()
+    # verbose=True
 
     # TODO: use a logger
     def log(*args, **kwargs):
@@ -574,6 +580,8 @@ def triangulate(
 
     if bounds is None:
         bounds = sdf.bounds
+        # _size = 500
+        # bounds = _bounds.AABB((-_size, -_size, -_size), (_size, _size, _size))
     else:
         bounds = _bounds.AABB(bounds)
 
@@ -635,29 +643,36 @@ def triangulate(
         f"Skipping {skipped} batches ({100 * skipped / len(batches):.1f}%), {len(filtered_batches)} remaining"
     )
 
-    submeshes = []
-    for i, batch in tqdm(
-        enumerate(filtered_batches),
-        disable=(not verbose) and (not progress),
-        desc="Evaluating SDF",
-        total=len(filtered_batches),
-        leave=False,
-    ):
-        result = _marching_cubes(sdf, batch)
-        if result is None or result.is_empty:
-            empty += 1
-        else:
-            nonempty += 1
-            submeshes.append(result)
+    if parallel:
+        from joblib import Parallel, delayed
+        submeshes = Parallel(n_jobs=-1, verbose=0)(delayed(_marching_cubes)(sdf, batch) for batch in tqdm(filtered_batches, disable=(not verbose) and (not progress), desc="Evaluating SDF", total=len(filtered_batches), leave=False))
+        empty = sum(1 for x in submeshes if x is None or x.is_empty)
+        nonempty = sum(1 for x in submeshes if x is not None and not x.is_empty)
+        submeshes = [x for x in submeshes if x is not None and not x.is_empty]
+    else:
+        submeshes = []
+        for i, batch in tqdm(
+            enumerate(filtered_batches),
+            disable=(not verbose) and (not progress),
+            desc="Evaluating SDF",
+            total=len(filtered_batches),
+            leave=False,
+        ):
+            result = _marching_cubes(sdf, batch)
+            if result is None or result.is_empty:
+                empty += 1
+            else:
+                nonempty += 1
+                submeshes.append(result)
 
-    # res = mesh.concatenate(submeshes) if len(submeshes) > 0 else mesh.TriangleMesh()
-    # res = res.remove_duplicated_vertices(1e-12)
-    # res = res.remove_duplicated_vertices()
 
-    # TODO: instead of calling remove_duplicated_vertices, we can directly compute which
-    # vertices should get merged by looking at batches that share vertices
     res = mesh.concatenate(submeshes) if len(submeshes) > 0 else mesh.TriangleMesh()
     
+    if simplify:
+        res = res.decimate(simplify)
+    
+    # TODO: instead of merging close coordinates which could create degenerate faces, we should keep
+    # track of indices in the batches.
     if merge_batches:
         res = res.remove_duplicated_vertices(1e-8)
 
