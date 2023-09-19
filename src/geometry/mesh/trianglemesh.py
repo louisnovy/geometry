@@ -938,16 +938,6 @@ class TriangleMesh(Geometry):
         `TriangleMesh`
             Decimated mesh.
         """
-        # raise NotImplementedError
-        # from trimesh import Trimesh
-        # r = Trimesh(self.vertices, self.faces).simplify_quadric_decimation(n_faces)
-        # return type(self)(r.vertices, r.faces)
-        # import pyfqmr
-        # simplifier = pyfqmr.Simplify()
-        # simplifier.setMesh(self.vertices, self.faces)
-        # simplifier.simplify_mesh(target_count=n_faces, max_iterations=20, verbose=False)
-        # vertices, faces, normals = simplifier.getMesh()
-        # return type(self)(vertices, faces)
         if self.is_empty:
             return self
 
