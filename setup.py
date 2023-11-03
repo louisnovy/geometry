@@ -85,7 +85,7 @@ def main():
         version=__version__,
         author="Louis Novy",
         author_email="novylouis@gmail.com",
-        install_requires=["numpy", "scipy", "xxhash", "DracoPy", "joblib", "dill"],
+        install_requires=["numpy", "scipy", "xxhash", "DracoPy"],
         extras_require={"testing": ["pytest"], "dev": ["pytest", "pre-commit"]},
         packages=find_packages("src"),
         package_dir={"": "src"},

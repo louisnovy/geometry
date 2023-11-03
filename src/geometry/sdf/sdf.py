@@ -13,8 +13,6 @@ import sys
 import numpy as np
 from numpy import maximum, minimum
 
-import dill
-
 from .. import mesh, bounds as _bounds, voxels, array  # TODO: did not forsee this conflict oops
 
 
@@ -553,10 +551,7 @@ def _marching_cubes(sdf, job):
     # r.plot(properties=False)
     return r
 
-from joblib import Memory
-memory = Memory(location="./.geometry/cache", verbose=0, mmap_mode="r", bytes_limit=1e9)
 
-@memory.cache
 def triangulate(
     sdf: SDF,
     step=None,

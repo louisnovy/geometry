@@ -1823,10 +1823,7 @@ def distance(
 
     return dists.astype(np.float32)
 
-from joblib import Memory
-memory = Memory(location="./.geometry/cache", verbose=0, mmap_mode="r")
 
-@memory.cache
 def resolve_self_intersections(
     obj,
     stitch=True,
@@ -1865,7 +1862,6 @@ def resolve_self_intersections(
 # TODO: generalize to allow multiple inputs and passing in a
 # modified function for winding number operations. this should allow
 # for useful things like multi intersection at a certain "depth"
-@memory.cache
 def intersection(
     A: TriangleMesh,
     B: TriangleMesh,
@@ -1971,7 +1967,7 @@ def intersection(
         res = res.remove_duplicated_faces()
     return res
 
-@memory.cache
+
 def convex_hull(
     obj: TriangleMesh | pointcloud.PointCloud | ArrayLike,
     qhull_options: str | None = None,
@@ -2021,7 +2017,7 @@ def convex_hull(
 
     return mesh_type(m.vertices, fixed)
 
-@memory.cache
+
 def extract_cells(m: TriangleMesh, resolve=False, outer_only=False) -> list[TriangleMesh]:
     """Cells are subsets of the mesh where any pair of points belonging to the cell can be
     connected by a curve without going through any faces.
