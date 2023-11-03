@@ -639,6 +639,9 @@ def triangulate(
     )
 
     if parallel:
+        from warnings import warn
+        warn("Pickling currently not supported: Falling back to single-threaded mode.")
+    if False:
         from joblib import Parallel, delayed
         submeshes = Parallel(n_jobs=-1, verbose=0)(delayed(_marching_cubes)(sdf, batch) for batch in tqdm(filtered_batches, disable=(not verbose) and (not progress), desc="Evaluating SDF", total=len(filtered_batches), leave=False))
         empty = sum(1 for x in submeshes if x is None or x.is_empty)
