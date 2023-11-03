@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -83,6 +84,15 @@ def box(
         (5, 6, 4),
     ]
 
+    # faces = [
+    #     (3, 2, 1, 0),
+    #     (0, 1, 5, 4),
+    #     (1, 2, 6, 5),
+    #     (2, 3, 7, 6),
+    #     (3, 0, 4, 7),
+    #     (4, 5, 6, 7),
+    # ]
+
     return TriangleMesh(vertices, faces)
 
 
@@ -134,9 +144,9 @@ def icosahedron(
     `TriangleMesh`
         The icosahedron.
     """
-
-    a = 0.525731112119133606025669084848876
-    b = 0.850650808352039932181540497063011
+    sqrt5 = math.sqrt(5.0)
+    a = 1.0 / sqrt5
+    b = 2.0 / sqrt5
     c = 0.0
 
     vertices = [
@@ -402,7 +412,7 @@ def uv_sphere(
     if not all([u >= 3, v >= 2]):
         raise ValueError("u must be at least 3 and v must be at least 2")
 
-    verts = np.zeros((u * (v - 1) + 2, 3))
+    verts = np.empty((u * (v - 1) + 2, 3))
 
     verts[-2, :] = (0, 0, 1)  # top pole
     verts[-1, :] = (0, 0, -1)  # bottom pole
@@ -411,26 +421,29 @@ def uv_sphere(
     i, j = np.indices((v - 1, u))
     v_angle = np.pi * (i + 1) / v
     u_angle = 2 * np.pi * j / u
+
+    u_sin, u_cos = np.sin(u_angle), np.cos(u_angle)
+    v_sin, v_cos = np.sin(v_angle), np.cos(v_angle)
     verts[:-2] = np.stack(
         (  # all but the poles
-            np.cos(u_angle) * np.sin(v_angle),
-            np.sin(u_angle) * np.sin(v_angle),
-            np.cos(v_angle),
+            u_cos * v_sin,
+            u_sin * v_sin,
+            v_cos,
         ),
         axis=-1,
     ).reshape(-1, 3)
 
-    vlen = len(verts)
-    faces = np.zeros((2 * u + 2 * (v - 2) * u, 3), dtype=np.int32)
+    n_verts = len(verts)
+    faces = np.empty((2 * u + 2 * (v - 2) * u, 3), dtype=np.int32)
 
     # fans for the poles
     faces[:u, 0] = np.arange(u)
     faces[:u, 1] = np.roll(faces[:u, 0], -1)
-    faces[:u, 2] = vlen - 2
+    faces[:u, 2] = n_verts - 2
 
     faces[u : 2 * u, 0] = np.arange(u) + (v - 2) * u
     faces[u : 2 * u, 1] = np.roll(faces[u : 2 * u, 0], 1)
-    faces[u : 2 * u, 2] = vlen - 1
+    faces[u : 2 * u, 2] = n_verts - 1
 
     # indices of quads
     i, j = np.indices((v - 2, u))
@@ -452,7 +465,7 @@ def uv_sphere(
     faces[idx, 2] = b
 
     verts *= radius
-    verts += np.asanyarray(center)
+    verts += np.asarray(center)
 
     return TriangleMesh(verts, faces)
 

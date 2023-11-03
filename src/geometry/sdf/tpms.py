@@ -3,10 +3,11 @@ from numpy import cos, sin, pi
 from numpy.typing import ArrayLike
 from .sdf import SDF
 
+tau = 2 * pi
 
 def gyroid() -> SDF:
     def f(p):
-        p = p / 0.5 * pi
+        p = np.asarray(p) * tau
         x, y, z = p.T
 
         r = cos(x) * sin(y)
@@ -20,17 +21,33 @@ def gyroid() -> SDF:
 
 def schwarz() -> SDF:
     def f(p):
-        p = p / 0.5 * pi
+        return np.sum(np.cos(np.asarray(p) * tau), axis=-1)
+
+    return SDF(f)
+
+
+def neovius() -> SDF:
+    def f(p):
+        p = np.asarray(p) * tau
         x, y, z = p.T
 
-        return cos(x) + cos(y) + cos(z)
+        cx, cy, cz = cos(x), cos(y), cos(z)
+
+        a = 3 * cx * cy + cz
+        b = 4 * cx * cy * cz
+
+        return a + b
+
+        # p = np.asarray(p) * tau
+        # cs = np.cos(p)
+        
 
     return SDF(f)
 
 
 def diamond() -> SDF:
     def f(p):
-        p = p / 0.5 * pi
+        p = np.asarray(p) * tau
         x, y, z = p.T
 
         sx, sy, sz = sin(x), sin(y), sin(z)
@@ -46,24 +63,9 @@ def diamond() -> SDF:
     return SDF(f)
 
 
-def neovius() -> SDF:
-    def f(p):
-        p = p / 0.5 * pi
-        x, y, z = p.T
-
-        cx, cy, cz = cos(x), cos(y), cos(z)
-
-        a = 3 * (cx * cy + cz)
-        b = 4 * cx * cy * cz
-
-        return a + b
-
-    return SDF(f)
-
-
 def lidinoid() -> SDF:
     def f(p):
-        p = p / 0.5 * pi
+        p = np.asarray(p) * tau
         x, y, z = p.T
 
         sx, sy, sz = sin(x), sin(y), sin(z)

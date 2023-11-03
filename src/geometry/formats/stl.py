@@ -48,12 +48,15 @@ def save_ascii(path: str | Path, vertices, faces, normals=None):
 def load_ascii(path: str | Path):
     vertices = []
     faces = []
+    n_vertices = 0
     with open(path) as f:
         for line in f:
             if line.startswith("vertex "):
                 vertices.append([float(x) for x in line.split()[1:4]])
+                n_vertices += 1
             elif line.startswith("endfacet"):
-                faces.append([len(vertices) - 3, len(vertices) - 2, len(vertices) - 1])
+                faces.append([n_vertices - 3, n_vertices - 2, n_vertices - 1])
+
     return np.array(vertices), np.array(faces)
 
 

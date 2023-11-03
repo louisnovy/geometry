@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 from numpy import isclose
 from numpy.linalg import norm
-from scipy.sparse import csr_array, csgraph
+from scipy.sparse import csr_array, csc_array, coo_array, csgraph
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 import _geometry as bindings
@@ -33,27 +33,7 @@ class TriangleMesh(Geometry):
     @classmethod
     def empty(cls, dim: int, dtype=None):
         return cls(np.empty((0, dim), dtype=dtype))
-    
-    @classmethod
-    def load(cls, path: str, format: str | None = None, **kwargs):
-        """Load a mesh from a file.
-
-        Parameters
-        ----------
-        path : str
-            Path to the file to load.
-        format : str, optional
-            File format to use. If not specified, will be inferred from the file extension.
-        kwargs
-            Additional keyword arguments to pass to the loader. See `geometry.formats` for details.
-
-        Returns
-        -------
-        mesh : TriangleMesh
-            A brand new mesh.
-        """
-        return load(path, format=format, **kwargs)
-    
+        
     def save(self, path: str | Path, format: str | None = None, **kwargs):
         """Save a TriangleMesh to a file.
 
@@ -80,11 +60,16 @@ class TriangleMesh(Geometry):
     def n_faces(self) -> int:
         """`int` : Number of `Faces` in the mesh."""
         return len(self.faces)
+    
+    @cached_property
+    def n_vertices_per_face(self) -> int:
+        """`int` : Number of vertices per face."""
+        return self.faces.shape[1]
 
     @cached_property
     def halfedges(self) -> np.ndarray:
         """Halfedges of the mesh."""
-        return self.faces[:, [0, 2, 2, 1, 1, 0]].reshape(-1, 2)
+        return self.faces.view(np.ndarray)[:, [0, 2, 2, 1, 1, 0]].reshape(-1, 2)
     
     @cached_property
     def _edge_maps(self):
@@ -93,13 +78,13 @@ class TriangleMesh(Geometry):
         # halfedges, edges, edge_map, cumulative_edge_counts, unique_edge_map = bindings.unique_edge_map(faces)
         # counts = np.diff(cumulative_edge_counts)
         # return halfedges, edges, edge_map, counts, unique_edge_map
-        edges, index, inverse, counts = unique_rows(self.halfedges, return_index=True, return_inverse=True, return_counts=True)
+        edges, index, inverse, counts = unique_rows(np.sort(self.halfedges, axis=-1), return_index=True, return_inverse=True, return_counts=True)
         return edges, index, inverse, counts
         
     @cached_property
     def n_halfedges(self) -> int:
         """`int` : Number of `Halfedges` in the mesh."""
-        return len(self.halfedges)
+        return self.n_faces * self.n_vertices_per_face
 
     @cached_property
     def edges(self) -> Edges:
@@ -403,6 +388,7 @@ class TriangleMesh(Geometry):
         *,
         face_weights = None,
         return_index: bool = False,
+        return_normals: bool = False,
         seed: int | None = None,
     ) -> pointcloud.PointCloud | tuple[pointcloud.PointCloud, np.ndarray]:
         """Sample points on the surface of the mesh.
@@ -452,7 +438,16 @@ class TriangleMesh(Geometry):
         samples = np.einsum("ij,ijk->ik", barycentric, self.faces.corners[face_indices])
 
         points = samples.view(pointcloud.PointCloud)
-        return (points, face_indices) if return_index else points
+
+        if any([return_index, return_normals]):
+            r = [points]
+            if return_index:
+                r.append(face_indices)
+            if return_normals:
+                r.append(np.einsum("ij,ijk->ik", barycentric, self.vertices.normals[self.faces[face_indices]]))
+            return tuple(r)
+
+        return points
     
     def sample(
         self,
@@ -466,8 +461,6 @@ class TriangleMesh(Geometry):
         ----------
         n_samples : `int`, optional
             Number of samples to generate.
-        spacing : `float`, optional
-            Approximate spacing between samples.
         seed : `int`, optional
             Random seed for reproducible results.
 
@@ -482,14 +475,12 @@ class TriangleMesh(Geometry):
         # batching and skipping empty space with a tree
         r = []
         n = 0
-        while True:
+        while n < n_samples:
+            print(n)
             points = self.aabb.sample(n_samples, seed = None if seed is None else seed + n)
             inside = self.contains(points)
             n += np.sum(inside)
             r.append(points[inside])
-
-            if n >= n_samples:
-                break
 
         return pointcloud.PointCloud(np.concatenate(r)[:n_samples])
         
@@ -628,7 +619,6 @@ class TriangleMesh(Geometry):
             mat[:self.dim, self.dim] = center - center @ mat[:self.dim, :self.dim]
         return self.transform(mat)
 
-    # TODO: maybe name offset?
     def offset(self, offset: float) -> TriangleMesh:
         """Offset the mesh by moving each vertex along its normal by the given offset.
 
@@ -647,6 +637,70 @@ class TriangleMesh(Geometry):
         """
         return type(self)(self.vertices + offset * self.vertices.normals, self.faces)
     
+    def shell(
+        self,
+        thickness: float,
+    ) -> TriangleMesh:
+        directions = 0.5 * thickness * self.vertices.normals
+        vertices = np.concatenate([self.vertices + directions, self.vertices - directions])
+        faces = np.concatenate([self.faces, np.fliplr(self.faces + len(self.vertices))])
+        return type(self)(vertices, faces)
+
+    # def shell(
+    #     self,
+    #     thickness: float,
+    #     inward: bool = False,
+    #     outward: bool = False,
+    #     cap_boundaries: bool = True,
+    # ) -> TriangleMesh:
+    #     """Create a shell around the mesh.
+
+    #     Parameters
+    #     ----------
+    #     thickness : `float`
+    #         Thickness of the shell.
+    #     inward : `bool`, optional
+    #         Whether to create an inward shell. Mutually exclusive with `outward`.
+    #     outward : `bool`, optional
+    #         Whether to create an outward shell. Mutually exclusive with `inward`.
+    #     cap_boundaries : `bool`, optional
+    #         Creates new faces connected to boundary edges. This allows creating a closed mesh from an open manifold.
+
+    #     Returns
+    #     -------
+    #     `TriangleMesh`
+    #     """
+    #     if inward and outward:
+    #         raise ValueError("Cannot create both inward and outward shell")
+
+    #     if not (inward or outward):
+    #         inward = True
+    #         outward = True
+    #         thickness *= 0.5
+
+    #     normals = self.vertices.normals
+
+    #     if inward:
+    #         v0 = self.vertices + thickness * normals
+    #     else:
+    #         v0 = self.vertices
+
+    #     if outward:
+    #         v1 = self.vertices - thickness * normals
+    #     else:
+    #         v1 = self.vertices
+
+    #     vertices = np.concatenate([v0, v1])
+
+    #     if not cap_boundaries:
+    #         faces = np.concatenate([self.faces, np.fliplr(self.faces + len(self.vertices))])
+    #         return type(self)(vertices, faces)
+
+    #     # we just need to stitch together the corresponding boundary vertices
+    #     # to create new faces
+    #     boundary_vertex_mask = self.vertices.boundaries
+    #     boundary_vertices = self.vertices[boundary_vertex_mask]
+
     def invert(self) -> TriangleMesh:
         """Invert the mesh. This is equivalent to using the unary `~` operator.
 
@@ -673,35 +727,63 @@ class TriangleMesh(Geometry):
 
         return type(self)(self.vertices, self.faces[:, ::-1])
 
-    def concatenate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
-        """Concatenate this mesh with another mesh or list of meshes.
+    # def concatenate(self, other: TriangleMesh | list[TriangleMesh]) -> TriangleMesh:
+    #     """Concatenate this mesh with another mesh or list of meshes.
+
+    #     Parameters
+    #     ----------
+    #     other : `TriangleMesh` or `list[TriangleMesh]`
+    #         Mesh or meshes to concatenate.
+
+    #     Returns
+    #     -------
+    #     `TriangleMesh`
+    #     """
+    #     if not isinstance(other, list):
+    #         other = [other]
+    #     if not all(isinstance(m, type(self)) for m in other):
+    #         raise ValueError(f"Meshes must all be of the same type: {type(self)}")
+
+    #     i = 0
+    #     vertices = []
+    #     faces = []
+    #     for m in [self, *other]:
+    #         vertices.append(m.vertices)
+    #         faces.append(m.faces + i)
+    #         i += len(m.vertices)
+
+    #     vertices = np.concatenate(vertices)
+    #     faces = np.concatenate(faces)
+
+    #     return type(self)(vertices, faces)
+
+    def concatenate(*meshes: TriangleMesh) -> TriangleMesh:
+        """Concatenate meshes.
 
         Parameters
         ----------
-        other : `TriangleMesh` or `list[TriangleMesh]`
-            Mesh or meshes to concatenate.
+        *meshes : `TriangleMesh`
+            Meshes to concatenate.
 
         Returns
         -------
         `TriangleMesh`
         """
-        if not isinstance(other, list):
-            other = [other]
-        if not all(isinstance(m, type(self)) for m in other):
-            raise ValueError(f"Meshes must all be of the same type: {type(self)}")
-
+        assert len(meshes) > 0, "Must provide at least one mesh to concatenate"
+        mesh_type = type(meshes[0])
+        if not all(isinstance(m, mesh_type) for m in meshes):
+            print(meshes)
+            raise ValueError(f"Meshes must all be of the same type: {mesh_type}")
+        
         i = 0
         vertices = []
         faces = []
-        for m in [self, *other]:
+        for m in meshes:
             vertices.append(m.vertices)
             faces.append(m.faces + i)
             i += len(m.vertices)
-
-        vertices = np.concatenate(vertices)
-        faces = np.concatenate(faces)
-
-        return type(self)(vertices, faces)
+            
+        return mesh_type(np.concatenate(vertices), np.concatenate(faces))
 
     def submesh(
         self,
@@ -1008,7 +1090,6 @@ class TriangleMesh(Geometry):
         vertices = corners.reshape(-1, v_per_face)
         faces = np.arange(len(vertices)).reshape(-1, v_per_face)
         return type(self)(vertices, faces)
-
     
     # TODO: figure out typing overloads...
     def detect_intersection(
@@ -1216,8 +1297,8 @@ class TriangleMesh(Geometry):
             if not np.any(close):
                 return sdists < 0
             
-            paralell = np.abs(np.einsum("ij,ij->i", a.faces.normals, b.faces.normals[face_index])) > 1 - 1e-6
-            coplanar = close & paralell
+            parallel = np.abs(np.einsum("ij,ij->i", a.faces.normals, b.faces.normals[face_index])) > 1 - 1e-6
+            coplanar = close & parallel
 
             if not np.any(coplanar):
                 return sdists < 0
@@ -1282,7 +1363,7 @@ class TriangleMesh(Geometry):
         return hash((self.vertices, self.faces))
 
     def __getstate__(self) -> dict:
-        return {"vertices": self.vertices, "faces": self.faces}
+        return {"vertices": self.vertices, "faces": self.faces, "_encloses_infinity": self._encloses_infinity}
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
@@ -1309,6 +1390,9 @@ class TriangleMesh(Geometry):
     
     def __invert__(self) -> TriangleMesh:
         return self.invert()
+    
+    def __contains__(self, query: ArrayLike):
+        return self.contains(query)
     
     # def __pos__(self) -> TriangleMesh:
     #     if np.sign(self.volume) == -1:
@@ -1407,12 +1491,21 @@ class Vertices(pointcloud.PointCloud):
         <3816x3816 sparse array of type '<class 'numpy.bool_'>'
                 with 22884 stored elements in Compressed Sparse Row format>
         """
+        # INVESTIGATE: this can be slightly incorrect for non-manifold meshes
         edges = self._mesh.halfedges.reshape(-1, 2)
         n_vertices = len(self)
         data = np.ones(len(edges), dtype=bool)
         matrix = csr_array((data, edges.T), shape=(n_vertices, n_vertices))
         return Adjacency(matrix)
-        
+
+    # @cached_property
+    # def sparse_edges_test(self) -> np.ndarray:
+    #     mat = self.adjacency.matrix
+    #     edges = np.empty((mat.nnz // 2, 2), dtype=np.int32)
+    #     edges[:, 0] = mat.indices[::2]
+    #     edges[:, 1] = mat.indices[1::2]
+    #     return edges
+                                
     @cached_property
     def incidence(self):
         """`Incidence` : Vertex incidence.
@@ -1438,30 +1531,30 @@ class Vertices(pointcloud.PointCloud):
         ...]
 
         >>> mesh.vertices.incidence.matrix
-        <3816x7628 sparse array of type '<class 'numpy.bool_'>'
+        <3816x7628 sparse array of type '<class 'numpy.float64'>'
                 with 22884 stored elements in Compressed Sparse Row format>
         
         """
         faces = self._mesh.faces
         row = faces.ravel()
-        # repeat for each vertex in face
-        col = np.repeat(np.arange(len(faces)), faces.shape[1])
+        col = np.repeat(np.arange(len(faces)), faces.shape[1]) # for each vertex in face
         data = np.ones(len(row), dtype=bool)
-        shape = (len(self), len(faces))
-        matrix = csr_array((data, (row, col)), shape=shape)
+        matrix = csr_array((data, (row, col)), shape=(len(self), len(faces)))
         return Adjacency(matrix)
 
-    # TODO: replace with angle weighted normals?
     @cached_property
     def normals(self) -> np.ndarray:
-        """`ndarray (n, 3)` : Unitized vertex normals.
+        """`ndarray (n, 3)` : Vertex normals.
 
-        The vertex normal is the average of the normals of the faces incident to the vertex weighted by area.
+        The vertex normal is the average of the normals of the faces incident on that vertex weighted by
+        the face corner angles incident on that vertex.
         """
         faces = self._mesh.faces
-        # since we are about to unitize next we can simply multiply by area
-        vertex_normals = self.incidence.matrix @ (faces.normals * faces.double_areas[:, None])
-        return unitize(vertex_normals)
+        row = faces.ravel()
+        col = np.repeat(np.arange(len(faces)), faces.shape[1])
+        data = faces.corner_angles.ravel()
+        matrix = coo_array((data, (row, col)), shape=(len(self), len(faces)))
+        return unitize(matrix @ faces.normals)
 
     @cached_property
     def areas(self) -> np.ndarray:
@@ -1473,7 +1566,10 @@ class Vertices(pointcloud.PointCloud):
         >>> m = ico_sphere()
         >>> assert np.allclose(m.vertices.areas.sum(), m.area)
         """
-        return self.incidence.matrix @ self._mesh.faces.areas / 3
+        # return self.incidence.matrix @ self._mesh.faces.areas / 3
+
+        faces = self._mesh.faces
+        return np.bincount(faces.ravel(), weights=np.repeat(faces.areas, faces.shape[1]), minlength=len(self)) / 3
 
     @cached_property
     def voronoi_areas(self) -> np.ndarray:
@@ -1534,7 +1630,7 @@ class Vertices(pointcloud.PointCloud):
         """
         faces = self._mesh.faces
         # sum the internal angles of each face for each vertex
-        summed_angles = np.bincount(faces.ravel(), weights=faces.internal_angles.ravel(), minlength=len(self))
+        summed_angles = np.bincount(faces.ravel(), weights=faces.corner_angles.ravel(), minlength=len(self))
 
         # non-boundary vertices have 2π - sum of adjacent angles
         defects = np.full(len(self), np.pi)
@@ -1589,8 +1685,8 @@ class Faces(Array):
             faces = np.empty((0, 3), dtype=np.int32)
         self = super().__new__(cls, faces, dtype=np.int32)
         self._mesh = mesh # type: ignore
-        if self.shape[1] != 3:
-            raise ValueError("Faces must be triangles.")
+        # if self.shape[1] != 3:
+        #     raise ValueError("Faces must be triangles.")
         return self
     
     @cached_property
@@ -1608,11 +1704,11 @@ class Faces(Array):
     @cached_property
     def corners(self) -> np.ndarray:
         """`ndarray (n, 3, 3)` : Coordinates of each corner for each face."""
-        return self._mesh.vertices.view(np.ndarray)[self]
+        return np.take(self._mesh.vertices, self, axis=0)
 
     @cached_property
-    def internal_angles(self):
-        """`ndarray (n, 3)` : Internal angles of each face."""
+    def corner_angles(self):
+        """`ndarray (n, 3)` : Angles at each corner of each face."""
         a, b, c = np.rollaxis(self.corners, 1)
         u, v, w = unitize(b - a), unitize(c - a), unitize(c - b)
         res = np.zeros((len(self), 3), dtype=np.float64)
@@ -1630,7 +1726,7 @@ class Faces(Array):
     def cotangents(self):
         """`ndarray (n, 3)` : Cotangents of each internal angle."""
         with np.errstate(divide="ignore", invalid="ignore"):
-            cot = np.reciprocal(np.tan(self.internal_angles))
+            cot = np.reciprocal(np.tan(self.corner_angles))
         cot[~np.isfinite(cot)] = 0
         return cot
 
@@ -1669,7 +1765,6 @@ class Faces(Array):
             # sum of squared edge lengths times cotangents
             sum_a = sq_el[:, a] * cot[:, a]
             sum_b = sq_el[:, b] * cot[:, b]
-            # this portion of the area is 1/8 of the sum
             res[:, i] = (sum_a + sum_b) / 8.0
 
         weights = np.array([[0.5, 0.25, 0.25],
@@ -1708,9 +1803,9 @@ class Faces(Array):
     @cached_property
     def boundaries(self) -> np.ndarray:
         """`ndarray (n,)` : Whether each face has any boundary edges."""
-        # edges = self._mesh.edges
-        # return np.isin(self, edges[edges.boundaries]).any(axis=1)
-        return np.array(self.adjacency.matrix.sum(axis=0) < 3).reshape(-1)
+        edges = self._mesh.edges
+        return np.isin(self, edges[edges.boundaries]).any(axis=1)
+        # return np.array(self.adjacency.matrix.sum(axis=0) < 3).reshape(-1)
 
     @cached_property
     def edge_lengths_squared(self) -> np.ndarray:
@@ -1856,6 +1951,11 @@ class Edges(Array):
         """`Points` of the midpoints of each edge."""
         vertices = self._mesh.vertices
         return pointcloud.PointCloud((vertices[self[:, 0]] + vertices[self[:, 1]]) / 2)
+    
+    @cached_property
+    def boundaries(self):
+        """(n_edges,) boolean array indicating whether each edge is a boundary edge."""
+        return self.valences == 1
     
 
 empty = TriangleMesh()
@@ -2081,3 +2181,50 @@ def smooth_taubin(
             vertices -= mu * delta
 
     return type(mesh)(vertices, mesh.faces)
+
+
+def minimal_oriented_bounds(obj: TriangleMesh):
+
+    def projected_bounds_2d(obj: TriangleMesh, normal: ArrayLike):
+
+        def project(points, normal):
+            z = normal
+            x = np.cross(z, [0, 0, 1])
+            x /= np.linalg.norm(x)
+            y = np.cross(z, x)
+            return points @ np.array([x, y, z]).T[:, :2]
+        
+        projected_points = project(obj.vertices, normal)
+        hull = ConvexHull(projected_points, qhull_options="QJ")
+        vertices = hull.points[hull.vertices]
+        edges = hull.points[hull.simplices]
+
+        edge_vectors = edges[:, 1] - edges[:, 0]
+        edge_vectors /= np.linalg.norm(edge_vectors, axis=1)[:, None]
+        perp_vectors = edge_vectors @ [[0, -1], [1, 0]]
+
+        # projections
+        x = np.dot(vertices, edge_vectors.T)
+        y = np.dot(vertices, perp_vectors.T)
+
+        # extents (dimensions) of each box
+        extents = np.column_stack((x.max(axis=1) - x.min(axis=1), y.max(axis=1) - y.min(axis=1)))
+
+        best_idx = np.argmin(extents.prod(axis=1))
+        return np.prod(extents[best_idx])
+
+    obj = convex_hull(obj)
+    
+    from tqdm import tqdm
+
+    best = None
+    for normal in obj.faces.normals:
+        area = projected_bounds_2d(obj, normal)
+        if best is None or area < best:
+            print(area)
+            best = area
+
+
+
+
+

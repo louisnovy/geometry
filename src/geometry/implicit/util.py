@@ -1,3 +1,4 @@
+from __future__ import annotations
 import numpy as np
 from numpy import minimum, maximum, cos, sin, pi
 from numpy.typing import ArrayLike

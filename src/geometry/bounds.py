@@ -56,6 +56,12 @@ class AABB(Geometry):
     @property
     def diagonal(self) -> float:
         return float(np.linalg.norm(self.extents))
+    
+    @property
+    def corners(self):
+        """The 2^dim corners of the AABB."""
+        return pointcloud.PointCloud(np.stack(np.meshgrid(*[[0, 1]] * self.dim), axis=-1).reshape(-1, self.dim)) * self.extents + self.min
+
 
     def sample(self, n=1, *, seed: int | None = None):
         """Uniformly sample `n` points within the AABB.
@@ -106,26 +112,32 @@ class AABB(Geometry):
         if return_index:
             return samples, facet_indices
         return samples
+    
+    # TODO: this is suprisingly slow. implement in c to avoid all the intermediate arrays
+    def contains(self, query: ArrayLike):
+        """Compute whether a query point or each query point is contained within the AABB.
+        Points on the boundary are considered contained.
 
-    # TODO: this is suprisingly slow. write a c version to avoid all the intermediate arrays
-    def contains(self, queries: ArrayLike):
-        """Compute whether each query point is contained within the AABB.
-        
         Parameters
         ----------
-        queries : `ArrayLike` (n_queries, dim)
+        query : `ArrayLike` (n_queries, dim) or (dim,)
             The query points.
 
         Returns
         -------
-        `ndarray` (n_queries,)
+        `ndarray` (n_queries,) or `bool`
             Whether each query point is contained within the AABB.
         """
-        queries = np.asanyarray(queries)
-        contained = np.full(queries.shape[0], True)
-        for i in range(self.dim):
-            np.logical_and(self.min[i] < queries[:, i], queries[:, i] < self.max[i], out=contained)
-        return contained
+        query = np.asanyarray(query)
+        
+        # # i think this ends up being significantly faster than np.all for large inputs
+        # # TODO: benchmark
+        # contained = np.full(query.shape[0], True)
+        # for i in range(self.dim):
+        #     contained &= (self.min[i] <= query[:, i]) & (query[:, i] <= self.max[i])
+        # return contained
+
+        return np.all((self.min <= query) & (query <= self.max), axis=query.ndim - 1)
 
     def detect_intersection(self, other: AABB) -> bool:
         """Check whether the AABB intersects another AABB."""

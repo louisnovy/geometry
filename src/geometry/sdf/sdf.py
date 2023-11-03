@@ -30,17 +30,14 @@ class SDF:
         self.func = func
 
     def __call__(self, queries: ArrayLike, **kwargs) -> np.ndarray:
-        try:
-            return self.func(np.asarray(queries), **kwargs)
-        except RecursionError:
-            limit = sys.getrecursionlimit()
-            target = limit * 2
-            warnings.warn(
-                "RecursionError while evaluating SDF; "
-                f"increasing recursion limit from {limit} to {target}"
-            )
-            sys.setrecursionlimit(target)
-            return self.func(np.asarray(queries), **kwargs)
+        # queries = np.asarray(queries)
+        # in_shape = queries.shape
+        # queries = queries.reshape(-1, queries.shape[-1])
+        # values = self.func(queries, **kwargs)
+        # return values.reshape(in_shape[:-1])
+        # return self.func(np.asarray(queries, dtype=np.float32), **kwargs)
+        return self.func(np.asarray(queries), **kwargs)
+        # return self.func(queries, **kwargs)
 
     def __repr__(self) -> str:
         try:
@@ -57,16 +54,16 @@ class SDF:
         if bounds is None:
             bounds = self.bounds
 
-        p = np.mgrid[bounds.min[0]:bounds.max[0]:200j, bounds.min[1]:bounds.max[1]:200j].reshape(2, -1).T
+        p = np.mgrid[bounds.min[0]:bounds.max[0]:300j, bounds.min[1]:bounds.max[1]:400j].reshape(2, -1).T
         p = np.hstack([p, np.zeros((len(p), 1))])
 
         def update(val):
             ax.clear()
             ax.set_title(f"z={slider_z.val}")
-            values = self(p + np.array([slider_x.val, slider_y.val, slider_z.val])).reshape(200, 200)
+            values = self(p + np.array([slider_x.val, slider_y.val, slider_z.val])).reshape(300, 400)
             # values = np.clip(values, -1, 1)
             # add isolines with sin 
-            values = np.sin(values * np.pi / 4)
+            values = np.sin(values * np.pi * 5)
             # clip to [-1, 1]
             values = np.clip(values, -1, 1)
 
@@ -126,7 +123,7 @@ class SDF:
     
     def normal(self, queries: ArrayLike, eps: float = 1e-6) -> np.ndarray:
         grad = self.gradient(queries, eps)
-        return grad / np.linalg.norm(grad, axis=1, keepdims=True)
+        return grad / np.linalg.norm(grad, axis=-1, keepdims=True)
     
     def normalize_gradient(self) -> SDF:
         def f(p):
@@ -178,7 +175,7 @@ class SDF:
         -------
         `SDF`
         """
-        axis = np.asanyarray(axis, dtype=np.float64)
+        axis = np.asarray(axis, dtype=np.float64)
         
         if axis.shape != (self.dim,):
             raise ValueError(f"Axis must have shape {(self.dim,)}")
@@ -195,7 +192,7 @@ class SDF:
         ], dtype=np.float64)
 
         if center is not None:
-            center = np.asanyarray(center, dtype=np.float64)
+            center = np.asarray(center, dtype=np.float64)
             if center.shape != (self.dim,):
                 raise ValueError(f"Center must have shape {(self.dim,)}")
             mat[:self.dim, self.dim] = center - center @ mat[:self.dim, :self.dim]
@@ -273,6 +270,19 @@ class SDF:
         
     #     return type(self)(f)
 
+    def elongate(
+        self,
+        size: float,
+    ) -> SDF:
+        def f(p):
+            q = np.abs(p) - size
+            x = q[:,0].reshape((-1, 1))
+            y = q[:,1].reshape((-1, 1))
+            z = q[:,2].reshape((-1, 1))
+            w = np.minimum(np.maximum(x, np.maximum(y, z)), 0)
+            return (self(np.maximum(q, 0)) + w).reshape(-1,)
+        return type(self)(f)
+
     def section(
         self,
         eps: float = 1e-6,
@@ -297,16 +307,18 @@ class SDF:
     
     def extrude(
         self,
-        height: float,
+        height: float | None = None,
+        symmetric: bool = False
     ) -> SDF:
         """Increment the dimension by extrusion."""
+        if symmetric:
+            height = height * 0.5
+
         def f(p):
-            w = vec(self(p[..., :-1]), np.abs(p[..., -1]) - height / 2)
-
-            def g(a, b):
-                return np.minimum(np.maximum(a, b), 0) + length(np.maximum(vec(a, b), 0))
-
-            return reduce(g, w.T[::-1])
+            if not symmetric:
+                p[..., -1] -= height
+            w = vec(self(p[..., :-1]), np.abs(p[..., -1]) - height)
+            return length(np.maximum(w, 0)) + np.minimum(np.maximum.reduce(w.T[::-1]), 0)
 
         return SDF(f)
     
@@ -315,7 +327,6 @@ class SDF:
         radius: float = 0,
     ) -> SDF:
         return SDF(lambda p: self(vec(length(p[..., :-1]) - radius, p[..., -1])))
-    
 
     def engrave(
         self,
@@ -382,6 +393,17 @@ class SDF:
             return length(vec(self(p), other(p))) - radius
         
         return SDF(f)
+    
+    def sweep_along_intersection(
+        self,
+        a: SDF,
+        b: SDF,
+    ) -> SDF:
+        def f(p):
+            return self(vec(a(p), b(p)))
+        
+        return SDF(f)
+
     
     def channel(
         self,
@@ -462,7 +484,7 @@ class SDF:
 
     def __invert__(self):
         return self.invert()
-
+    
 
 SAMPLES = 2**22
 BATCH_SIZE = 32
@@ -476,8 +498,8 @@ def cartesian_product(*arrays):
 def estimate_bounds(sdf: SDF):
     s = 12
     n = 16
-    x0 = y0 = z0 = -1e9
-    x1 = y1 = z1 = 1e9
+    x0 = y0 = z0 = -1e6
+    x1 = y1 = z1 = 1e6
     prev = None
     # for i in trange(n, desc="Estimating bounds", leave=False):
     for i in range(n):
@@ -497,8 +519,8 @@ def estimate_bounds(sdf: SDF):
         if len(where) == 0:
             break
 
-        x1, y1, z1 = (x0, y0, z0) + where.max(axis=0) * d + d / 2
-        x0, y0, z0 = (x0, y0, z0) + where.min(axis=0) * d - d / 2
+        x1, y1, z1 = np.array([x0, y0, z0]) + where.max(axis=0) * d + d / 2
+        x0, y0, z0 = np.array([x0, y0, z0]) + where.min(axis=0) * d - d / 2
 
     return _bounds.AABB((x0, y0, z0), (x1, y1, z1))
 
@@ -520,9 +542,7 @@ def skip_these_jobs(sdf: SDF, jobs):
     if np.any(idx):
         corners = np.array([list(itertools.product(*x)) for x in bounds[idx]])
         # turn into list of points for query and then back
-        contained = sdf.contains(corners.reshape(-1, corners.shape[-1])).reshape(
-            corners.shape[:-1]
-        )
+        contained = sdf.contains(corners.reshape(-1, corners.shape[-1])).reshape(corners.shape[:-1])
         # either all corners are inside or all corners are outside to skip
         to_skip[idx] = np.all(contained == contained[..., [0]], axis=-1)
 
@@ -553,7 +573,6 @@ def _marching_cubes(sdf, job):
     # r.plot(properties=False)
     return r
 
-
 def triangulate(
     sdf: SDF,
     step=None,
@@ -563,10 +582,10 @@ def triangulate(
     verbose=False,
     progress=False,
     sparse=True,
+    parallel=True,
     merge_batches=True,
 ):
     start = time.time()
-
     # TODO: use a logger
     def log(*args, **kwargs):
         if verbose:
@@ -635,29 +654,32 @@ def triangulate(
         f"Skipping {skipped} batches ({100 * skipped / len(batches):.1f}%), {len(filtered_batches)} remaining"
     )
 
-    submeshes = []
-    for i, batch in tqdm(
-        enumerate(filtered_batches),
-        disable=(not verbose) and (not progress),
-        desc="Evaluating SDF",
-        total=len(filtered_batches),
-        leave=False,
-    ):
-        result = _marching_cubes(sdf, batch)
-        if result is None or result.is_empty:
-            empty += 1
-        else:
-            nonempty += 1
-            submeshes.append(result)
+    if parallel:
+        from joblib import Parallel, delayed
+        submeshes = Parallel(n_jobs=-1, verbose=0)(delayed(_marching_cubes)(sdf, batch) for batch in tqdm(filtered_batches, disable=(not verbose) and (not progress), desc="Evaluating SDF", total=len(filtered_batches), leave=False))
+        empty = sum(1 for x in submeshes if x is None or x.is_empty)
+        nonempty = sum(1 for x in submeshes if x is not None and not x.is_empty)
+        submeshes = [x for x in submeshes if x is not None and not x.is_empty]
+    else:
+        submeshes = []
+        for i, batch in tqdm(
+            enumerate(filtered_batches),
+            disable=(not verbose) and (not progress),
+            desc="Evaluating SDF",
+            total=len(filtered_batches),
+            leave=False,
+        ):
+            result = _marching_cubes(sdf, batch)
+            if result is None or result.is_empty:
+                empty += 1
+            else:
+                nonempty += 1
+                submeshes.append(result)
 
-    # res = mesh.concatenate(submeshes) if len(submeshes) > 0 else mesh.TriangleMesh()
-    # res = res.remove_duplicated_vertices(1e-12)
-    # res = res.remove_duplicated_vertices()
-
+    res = mesh.TriangleMesh.concatenate(*submeshes) if len(submeshes) > 0 else mesh.TriangleMesh()
+    
     # TODO: instead of calling remove_duplicated_vertices, we can directly compute which
     # vertices should get merged by looking at batches that share vertices
-    res = mesh.concatenate(submeshes) if len(submeshes) > 0 else mesh.TriangleMesh()
-    
     if merge_batches:
         res = res.remove_duplicated_vertices(1e-8)
 
@@ -690,15 +712,15 @@ def triangulate(
 
 
 def length(a):
-    return np.linalg.norm(a, axis=1)
+    return np.sqrt(np.sum(a**2, axis=-1))
 
 
 def normalize(a):
-    return a / np.linalg.norm(a)
+    return a / length(a)
 
 
 def dot(a, b):
-    return np.sum(a * b, axis=1)
+    return np.sum(a * b, axis=-1)
 
 
 def vec(*arrs):
@@ -775,7 +797,6 @@ def plane(
 
     return SDF(lambda p: dot(origin - p, n))
 
-
 def line(
     direction: ArrayLike = (0, 0, 1),
     *,
@@ -828,8 +849,8 @@ def line_segment(
     -------
     `SDF`
     """
-    a = np.asanyarray(a)
-    b = np.asanyarray(b)
+    a = np.asarray(a)
+    b = np.asarray(b)
 
     def f(p):
         pa = p - a
@@ -860,8 +881,8 @@ def line_segments(
     -------
     `SDF`
     """
-    points = np.asanyarray(points)
-    indices = np.asanyarray(indices)
+    points = np.asarray(points)
+    indices = np.asarray(indices)
 
     def f(p):
         p = p.reshape(-1, 1, 3)
@@ -899,7 +920,7 @@ def sphere(
     if center is None:
         center = [0, 0, 0]
 
-    center = np.asanyarray(center)
+    center = np.asarray(center)
 
     return SDF(lambda p: length(p - center) - r)
 
@@ -920,7 +941,7 @@ def point(
     `SDF`
         SDF of a point.
     """
-    location = np.asanyarray(location)
+    location = np.asarray(location)
 
     return SDF(lambda p: length(p - location))
 
@@ -948,7 +969,7 @@ def box(
     -------
     `SDF`
     """
-    size = np.asanyarray(size)
+    size = np.asarray(size)
 
     if size.ndim in (0, 1):
         pass
@@ -960,18 +981,24 @@ def box(
     else:
         raise ValueError("box size must be a float, single vector, or pair of vectors")
 
-    # if center is None:
-    #     center = [0, 0, 0]
-
-    # center = np.asanyarray(center)
-
     halfsize = size / 2  # type: ignore
 
     def f(p):
         if center is not None:
             p = p - center
+        
         q = np.abs(p) - halfsize
-        return length(maximum(q, 0)) + minimum(np.max(q, axis=1), 0)
+        # return length(np.maximum(q, 0)) + np.minimum(np.maximum.reduce(q.T[::-1]), 0)
+        return length(np.maximum(q, 0)) + np.minimum(np.max(q.T[::-1], axis=-2), 0)
+
+
+        # p = np.maximum(q, 0)
+        # print(p, type(p))
+        # p = length(p)
+        # print(p, type(p))
+        # m = np.minimum(np.maximum.reduce(q.T[::-1]), 0)
+        # print(m)
+        # return p + m
 
     return SDF(f)
 
@@ -1000,14 +1027,14 @@ def capped_cone(
     -------
     `SDF`
     """
-    a = np.asanyarray(a)
-    b = np.asanyarray(b)
+    a = np.asarray(a)
+    b = np.asarray(b)
 
     def f(p):
         rba = rb - ra
-        baba = np.dot(b - a, b - a)
+        baba = dot(b - a, b - a)
         papa = dot(p - a, p - a)
-        paba = np.dot(p - a, b - a) / baba
+        paba = dot(p - a, b - a) / baba
         x = np.sqrt(papa - paba * paba * baba)
         cax = np.maximum(0, x - np.where(paba < 0.5, ra, rb))
         cay = np.abs(paba - 0.5) - 0.5
@@ -1057,8 +1084,8 @@ def torus(
         center = (0, 0, 0)
 
     def f(p):
-        xy = p[:, [0, 1]] - center[:2]
-        z = p[:, 2] - center[2]
+        xy = p[..., [0, 1]] - center[:2]
+        z = p[..., 2] - center[-1]
         a = length(xy) - R
         b = length(vec(a, z)) - r
         return b

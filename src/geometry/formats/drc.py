@@ -14,7 +14,11 @@ extensions = [".drc", ".draco"]
 def load(path: str | Path) -> mesh.TriangleMesh | pointcloud.PointCloud:
     with open(path, "rb") as f:        
         obj = DracoPy.decode(f.read())
-        colors = obj.colors / 255 if obj.colors is not None else None
+        # colors = obj.colors / 255 if obj.colors is not None else None
+        if hasattr(obj, "colors"):
+            colors = obj.colors / 255
+        else:
+            colors = None
         attributes = dict(colors=colors) if colors is not None else None
         
         # if hasattr(obj, "faces"):

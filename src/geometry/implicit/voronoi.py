@@ -6,7 +6,7 @@ from scipy.spatial import KDTree
 from .implicit import Implicit, normalize_gradient, offset
 
 
-def voronoi(seed_points: ArrayLike, thickness: float = 1) -> Implicit:
+def voronoi(seed_points: ArrayLike, thickness: float = 0) -> Implicit:
     """
     Implicit distance to edges of a Voronoi diagram.
 
@@ -28,5 +28,6 @@ def voronoi(seed_points: ArrayLike, thickness: float = 1) -> Implicit:
         return dists[:, 1] - dists[:, 0]
     
     vor = normalize_gradient(Implicit(f))
+    # vor = Implicit(f)
 
     return offset(vor, thickness * 0.5)

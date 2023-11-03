@@ -154,9 +154,11 @@ def gradient(
     orig = obj(queries)
     grad = np.zeros_like(queries)
     for i in range(queries.shape[1]):
-        q = queries.copy()
-        q[:, i] += eps
-        grad[:, i] = (obj(q) - orig) / eps
+        queries[..., i] += eps
+        grad[..., i] = obj(queries) - orig
+        queries[..., i] -= eps
+
+    grad /= eps
 
     if return_distance:
         return grad, orig
@@ -212,32 +214,37 @@ def clamp(
 
 def ramp(
     obj: Implicit,
-    min: float | Implicit,
-    max: float | Implicit,
-    func: Callable | None = None,
+    in_min: float | Implicit,
+    in_max: float | Implicit,
+    out_min: float | Implicit,
+    out_max: float | Implicit,
 ) -> Implicit:
     """
-    Ramp the distance to an `Implicit` to a given range.
+    Remap the distance to an `Implicit` from one range to another.
 
     Parameters
     ----------
     obj : `Implicit`
-        The `Implicit` to ramp the distance of.
-    min : `float` or `Implicit`
-        The minimum distance.
-    max : `float` or `Implicit`
-        The maximum distance.
-    func : `Callable`
-        The ramp function to use.
+        The `Implicit` to remap the distance of.
+    in_min : `float` or `Implicit`
+        The minimum distance of the input range.
+    in_max : `float` or `Implicit`
+        The maximum distance of the input range.
+    out_min : `float` or `Implicit`
+        The minimum distance of the output range.
+    out_max : `float` or `Implicit`
+        The maximum distance of the output range.
 
     Returns
     -------
     `Implicit`
     """
-    if func is None:
-        func = lambda d, min, max: (d - min) / (max - min)
-
-    return func(obj, min, max)
+    def f(p):
+        d = obj(p)
+        return (d - in_min) / (in_max - in_min) * (out_max - out_min) + out_min
+    
+    return type(obj)(f)
+    
 
 
 def complement(obj: Implicit) -> Implicit:
@@ -378,7 +385,8 @@ def offset(obj: Implicit, offset: float | Implicit) -> Implicit:
     -------
     `Implicit`
     """
-    return obj - offset
+    # return obj - offset
+    return type(obj)(lambda p: obj(p) - offset)
 
 
 def shell(
@@ -405,8 +413,10 @@ def shell(
     -------
     `Implicit`
     """
+
     if not (inward ^ outward):
-        return abs(obj) - thickness / 2
+        # return abs(obj) - thickness / 2
+        return type(obj)(lambda p: np.abs(obj(p)) - get_scalars(thickness, p) / 2)
 
     if inward:
         thickness = -thickness
@@ -577,7 +587,7 @@ def linear_array(
         n = np.asarray(n)
         return type(obj)(lambda p: obj(p - spacing * np.clip(np.round(p / spacing), -n, n)))
 
-    return type(obj)(lambda p: obj(np.mod(p + 0.5 * spacing, spacing) - 0.5 * spacing))
+    return type(obj)(lambda p: obj((p + 0.5 * spacing) % spacing - 0.5 * spacing))
 
 
 def transform(
@@ -602,12 +612,11 @@ def transform(
         return type(obj)(lambda p: obj(-transformation(p)))
 
     matrix = np.asarray(transformation)
-
     scaling = np.linalg.norm(matrix[..., :-1, :-1], axis=-1)
-    matrix = np.linalg.inv(matrix)
+    inv_matrix = np.linalg.inv(matrix)
 
     def f(p):
-        p = np.einsum("...ij,...j->...i", matrix[..., :-1, :-1], p) + matrix[..., :-1, -1]
+        p = np.einsum("...ij,...j->...i", inv_matrix[..., :-1, :-1], p) + inv_matrix[..., :-1, -1]
         return obj(p) * np.min(scaling, axis=-1)
 
     return type(obj)(f)
