@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 from numpy import isclose
 from numpy.linalg import norm
-from scipy.sparse import csr_array, csgraph
+from scipy.sparse import coo_array, csr_array, csgraph
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 import _geometry as bindings
@@ -1327,17 +1327,19 @@ class Vertices(pointcloud.PointCloud):
         matrix = csr_array((data, (row, col)), shape=shape)
         return Adjacency(matrix)
 
-    # TODO: replace with angle weighted normals?
     @cached_property
     def normals(self) -> np.ndarray:
-        """`ndarray (n, 3)` : Unitized vertex normals.
+        """`ndarray (n, 3)` : Vertex normals.
 
-        The vertex normal is the average of the normals of the faces incident to the vertex weighted by area.
+        The vertex normal is the average of the normals of the faces incident on that vertex weighted by
+        the face corner angles incident on that vertex.
         """
         faces = self._mesh.faces
-        # since we are about to unitize next we can simply multiply by area
-        vertex_normals = self.incidence.matrix @ (faces.normals * faces.double_areas[:, None])
-        return unitize(vertex_normals)
+        row = faces.ravel()
+        col = np.repeat(np.arange(len(faces)), faces.shape[1])
+        data = faces.internal_angles.ravel()
+        matrix = coo_array((data, (row, col)), shape=(len(self), len(faces)))
+        return unitize(matrix @ faces.normals)
 
     @cached_property
     def areas(self) -> np.ndarray:
