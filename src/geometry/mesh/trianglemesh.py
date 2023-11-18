@@ -1892,6 +1892,9 @@ def intersection(
     `TriangleMesh`
         Intersection of the two meshes.
     """
+    if A.is_empty and B.is_empty:
+        return type(A)(_encloses_infinity=A._encloses_infinity & B._encloses_infinity)
+
     original_A, original_B = A, B
     is_intersecting = False
 
