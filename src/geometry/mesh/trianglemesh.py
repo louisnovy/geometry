@@ -1255,6 +1255,9 @@ class TriangleMesh(Geometry):
         B = other
         is_intersecting = False
 
+        if A.is_empty and B.is_empty:
+            return type(self)(_encloses_infinity=A._encloses_infinity & B._encloses_infinity)
+
         if resolve:
             is_intersecting, intersecting_face_pairs = A.detect_intersection(B, return_index=True) # type: ignore
 
