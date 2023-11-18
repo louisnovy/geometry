@@ -1116,11 +1116,116 @@ class TriangleMesh(Geometry):
             
     #     resolved = concatenated.submesh(to_resolve).resolve_self_intersections() # type: ignore
     #     resolved = (resolved + concatenated.submesh(~to_resolve)).remove_duplicated_vertices() # type: ignore
-    def resolve_self_intersections(self, *args, **kwargs):
-        return resolve_self_intersections(self, *args, **kwargs)
 
-    def intersection(self, other: TriangleMesh, crop=False, resolve=True, threshold=None, exact=False):
-        return intersection(self, other, crop=crop, resolve=resolve, threshold=threshold, exact=exact)
+    # TODO: generalize to allow multiple inputs and passing in a
+    # modified function for winding number operations. this should allow
+    # for useful things like multi intersection at a certain "depth"
+    def intersection(
+        self,
+        other: TriangleMesh,
+        crop: bool = False,
+        threshold: float | None = None,
+        exact: bool = False,
+        resolve: bool = True,
+    ):  
+        """Create a mesh enclosing the logical intersection of the volume represented by this mesh and another mesh.
+
+        Parameters
+        ----------
+        other : `TriangleMesh`
+            Other mesh.
+        crop : `bool`, optional (default: False)
+            Crop the original mesh with the volume of the intersection by only keeping faces from the original mesh.
+        threshold : `float`, optional (default: None)
+            Winding number threshold for determining if a point is inside or outside the mesh.
+        exact : `bool`, optional (default: False)
+            If True, use exact winding number computation. If False, use fast approximation.
+        resolve : `bool`, optional (default: True)
+            If False, don't bother resolving intersections. Could be useful for fast approximations.
+
+        Returns
+        -------
+        `TriangleMesh`
+            Intersection of the two meshes.
+        """
+        A = self
+        B = other
+        is_intersecting = False
+
+        if A.is_empty and B.is_empty:
+            return type(self)(_encloses_infinity=A._encloses_infinity & B._encloses_infinity)
+
+        if resolve:
+            is_intersecting, intersecting_face_pairs = A.detect_intersection(B, return_index=True) # type: ignore
+
+            if is_intersecting:
+                a_intersections = np.in1d(np.arange(A.n_faces), intersecting_face_pairs[:, 0])
+                b_intersections = np.in1d(np.arange(B.n_faces), intersecting_face_pairs[:, 1])
+
+                a_intersecting = A.submesh(a_intersections)
+                b_intersecting = B.submesh(b_intersections)
+                unresolved = a_intersecting + b_intersecting
+
+                resolved, birth_faces = unresolved.resolve_self_intersections(return_sources=True) # type: ignore
+                from_a = birth_faces < a_intersecting.n_faces
+
+                A = resolved.submesh(from_a) + A.submesh(~a_intersections)
+                B = resolved.submesh(~from_a) + B.submesh(~b_intersections)
+
+                # (A + B).show()
+                # exit()
+        
+        # def faces_inside(a: TriangleMesh, b: TriangleMesh):
+        #     return b.contains(a.faces.centroids, threshold=threshold, exact=exact)
+        
+        def faces_inside(a: TriangleMesh, b: TriangleMesh):
+            # if not resolve:
+            #     all_corners = a.faces.corners.reshape(-1, 3)
+            #     inside_corners = b.contains(all_corners, threshold=threshold, exact=exact)
+            #     return np.any(inside_corners.reshape(-1, 3), axis=1)
+            
+            inside = np.full(a.n_faces, False)
+            
+            if any([a.is_empty, b.is_empty]):
+                return ~inside if b._encloses_infinity else inside
+            
+            test_points = a.faces.centroids
+            sdists, face_index = b.distance(test_points, signed=True, return_index=True, wn_threshold=threshold, exact_wn=exact)
+
+            close = (np.abs(sdists) < 1e-6)
+            
+            if not np.any(close):
+                return sdists < 0
+            
+            parallel = np.abs(np.einsum("ij,ij->i", a.faces.normals, b.faces.normals[face_index])) > 1 - 1e-6
+            coplanar = close & parallel
+
+            if not np.any(coplanar):
+                return sdists < 0
+            
+            print(f"{np.sum(coplanar)} coplanar faces detected.")
+
+            coplanar_test_points = test_points[coplanar]
+            inside[~coplanar] = sdists[~coplanar] < 0
+            jog = a.submesh(coplanar).faces.normals * 1e-4
+            coplanar_test_points -= jog
+            
+            inside[coplanar] = b.contains(coplanar_test_points, threshold=threshold, exact=exact)
+            # inside[coplanar] &= np.any(b.contains((a.submesh(coplanar).faces.corners - jog.reshape(-1, 1, 3)).reshape(-1, 3), threshold=threshold, exact=exact).reshape(-1, 3), axis=1)
+            return inside
+
+
+        res = A.submesh(faces_inside(A, other))
+        # res = A.submesh(faces_inside(A, B))
+
+        if not crop:
+            res += B.submesh(faces_inside(B, self))
+            # res += B.submesh(faces_inside(B, A))
+        
+        if is_intersecting:
+            res = res.remove_duplicated_vertices()
+            res = res.remove_duplicated_faces()
+        return res
     
     def difference(self, other: TriangleMesh, crop=False, resolve=True, threshold=None, exact=False):
         return self.intersection(other.invert(), crop=crop, resolve=resolve, threshold=threshold, exact=exact)
