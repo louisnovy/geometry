@@ -29,61 +29,29 @@ class SDF:
         self._k = None
         self.func = func
 
+    # HACK: this is ridiculous but helps speed up big tapes with lots of common subexpressions
+    # it's stupid because we are caching the actual value during the computation for all functions instead of building
+    # a tape with common subexpressions, but since it doesn't use TOO much memory we can deal with it for now
+    @cached_property
+    def fake_deduplicated(self):
+        last_hash = None
+        last_result = None
+        def f(p):
+            nonlocal last_hash, last_result
+            key = hash(p)
+            if key != last_hash:
+                last_hash = key
+                last_result = self.func(p)
+            return last_result
+
+        return f
+
     def __call__(self, queries: ArrayLike, **kwargs) -> np.ndarray:
         try:
+            return self.fake_deduplicated(array.Array(queries), **kwargs)
+        except Exception as e:
+            # print(e)
             return self.func(np.asarray(queries), **kwargs)
-        except RecursionError:
-            limit = sys.getrecursionlimit()
-            target = limit * 2
-            warnings.warn(
-                "RecursionError while evaluating SDF; "
-                f"increasing recursion limit from {limit} to {target}"
-            )
-            sys.setrecursionlimit(target)
-            return self.func(np.asarray(queries), **kwargs)
-
-    # def __repr__(self) -> str:
-    #     try:
-    #         name = self.func.__qualname__.split(".")[0]
-    #     except AttributeError:
-    #         name = type(self.func).__name__
-
-    #     return f"<{type(self).__name__}({name}) {self.bounds}>"
-    
-    def slice_viewer(self, bounds=None, interactive=True):
-        from matplotlib import pyplot as plt
-        from matplotlib.widgets import Slider
-
-        if bounds is None:
-            bounds = self.bounds
-
-        p = np.mgrid[bounds.min[0]:bounds.max[0]:200j, bounds.min[1]:bounds.max[1]:200j].reshape(2, -1).T
-        p = np.hstack([p, np.zeros((len(p), 1))])
-
-        def update(val):
-            ax.clear()
-            ax.set_title(f"z={slider_z.val}")
-            values = self(p + np.array([slider_x.val, slider_y.val, slider_z.val])).reshape(200, 200)
-            # values = np.clip(values, -1, 1)
-            # add isolines with sin 
-            values = np.sin(values * np.pi / 4)
-            # clip to [-1, 1]
-            values = np.clip(values, -1, 1)
-
-            ax.imshow(values, cmap="viridis")
-            fig.canvas.draw_idle()
-
-        fig, ax = plt.subplots()
-        slider_x = Slider(plt.axes([0.25, 0.05, 0.65, 0.03]), 'x', bounds.min[0] - bounds.extents[0], bounds.max[0] + bounds.extents[0], valinit=0)
-        slider_y = Slider(plt.axes([0.25, 0.10, 0.65, 0.03]), 'y', bounds.min[1] - bounds.extents[1], bounds.max[1] + bounds.extents[1], valinit=0)
-        slider_z = Slider(plt.axes([0.25, 0.15, 0.65, 0.03]), 'z', bounds.min[2] - bounds.extents[2], bounds.max[2] + bounds.extents[2], valinit=0)
-        slider_x.on_changed(update)
-        slider_y.on_changed(update)
-        slider_z.on_changed(update)
-        update(0)
-
-        if interactive:
-            plt.show()
 
     def k(self, k=None):
         self._k = k
