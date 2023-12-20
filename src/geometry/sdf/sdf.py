@@ -9,7 +9,7 @@ import itertools
 import time
 import warnings
 import sys
-
+import dill
 import numpy as np
 from numpy import maximum, minimum
 
@@ -180,7 +180,32 @@ class SDF:
         """Offset the isosurface of the SDF."""
         return type(self)(lambda p: self(p) - offset)
 
-    def shell(self, thickness: float, inward: bool = False, outward: bool = False) -> SDF:
+    # def shell(self, thickness: float, inward: bool = False, outward: bool = False) -> SDF:
+    #     """
+    #     Create a shell of the volume defined by the SDF.
+
+    #     Parameters
+    #     ----------
+    #     thickness : float
+    #         The thickness of the shell.
+    #     inward : bool, optional
+    #         Whether to create an inward shell, by default False. Mutually exclusive with `outward`.
+    #     outward : bool, optional
+    #         Whether to create an outward shell, by default False. Mutually exclusive with `inward`.
+
+    #     Returns
+    #     -------
+    #     `SDF`
+    #     """
+    #     if not (inward ^ outward):
+    #         return type(self)(lambda p: np.abs(self(p)) - thickness / 2)
+        
+    #     if inward:
+    #         thickness = -thickness
+        
+    #     return self.offset(thickness / 2).shell(abs(thickness))
+
+    def shell(self, thickness: float, centered: bool = False) -> SDF:
         """
         Create a shell of the volume defined by the SDF.
 
@@ -188,22 +213,19 @@ class SDF:
         ----------
         thickness : float
             The thickness of the shell.
-        inward : bool, optional
-            Whether to create an inward shell, by default False. Mutually exclusive with `outward`.
-        outward : bool, optional
-            Whether to create an outward shell, by default False. Mutually exclusive with `inward`.
+            Negative values create an inward shell.
+            Positive values create an outward shell.
+        centered : bool, optional
+            Whether to center the shell on the surface, by default False.
 
         Returns
         -------
         `SDF`
         """
-        if not (inward ^ outward):
-            return type(self)(lambda p: np.abs(self(p)) - thickness / 2)
+        if centered:
+            return type(self)(lambda p: np.abs(self(p)) - abs(thickness) / 2)
         
-        if inward:
-            thickness = -thickness
-        
-        return self.offset(thickness / 2).shell(abs(thickness))
+        return self.offset(thickness / 2).shell(thickness, centered=True)
     
     # def section(
     #     self,
